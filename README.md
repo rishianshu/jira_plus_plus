@@ -39,13 +39,19 @@ Bootstrapped development workspace for the Jira++ platform described in `specs/`
    ```
    - API available on `http://localhost:4000/graphql`
    - Web app available on `http://localhost:3000`
+   - Admin console reachable at `http://localhost:3000/admin`
+     - Use `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env` (update to secure values before booting)
 
 ## Tooling
 - **Linting** – `pnpm lint`
+- **Type checking** – `pnpm typecheck`
 - **Formatting** – `pnpm format`
 - **Testing** – `pnpm test`
+- **Full verification** – `pnpm verify`
 
 ## Next Steps
 - Flesh out GraphQL schema & resolvers per feature specs.
 - Implement Jira REST client, syncing into Prisma models.
 - Build dashboard views using `@apollo/client` queries, React Router layouts, and shadcn-inspired components.
+- Flesh out Jira site polling & health checks, token rotation, and audit logging in the admin console.
+- Persist theme preferences per user profile and add accessibility audits for the admin console design system.

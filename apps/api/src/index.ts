@@ -3,16 +3,20 @@ import { ApolloServer } from "@apollo/server";
 import { schema } from "./schema";
 import { createContext } from "./context";
 import { getEnv } from "./env";
+import { seedAdminUser } from "./auth";
 
 async function bootstrap() {
   const env = getEnv();
+
+  await seedAdminUser();
+
   const server = new ApolloServer({
     schema,
   });
 
   const { url } = await startStandaloneServer(server, {
     listen: { port: env.PORT },
-    context: async () => createContext(),
+    context: async ({ req }) => createContext({ req }),
   });
 
   /* eslint-disable no-console */

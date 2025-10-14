@@ -1,5 +1,23 @@
 import { config } from "dotenv";
+import path from "node:path";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
+
+const dirname = path.dirname(fileURLToPath(import.meta.url));
+const apiRoot = path.resolve(dirname, "..");
+const repoRoot = path.resolve(apiRoot, "..", "..");
+
+const candidateEnvPaths = [
+  path.join(repoRoot, ".env"),
+  path.join(apiRoot, ".env"),
+];
+
+for (const envPath of candidateEnvPaths) {
+  if (existsSync(envPath)) {
+    config({ path: envPath, override: false });
+  }
+}
 
 const envSchema = z.object({
   PORT: z.coerce.number().default(4000),
@@ -8,6 +26,11 @@ const envSchema = z.object({
   JIRA_EMAIL: z.string().email(),
   JIRA_API_TOKEN: z.string().min(1, "JIRA_API_TOKEN is required"),
   OPENAI_API_KEY: z.string().min(1, "OPENAI_API_KEY is required"),
+  SESSION_SECRET: z.string().min(32, "SESSION_SECRET must be at least 32 characters"),
+  ENCRYPTION_SECRET: z.string().min(32, "ENCRYPTION_SECRET must be at least 32 characters"),
+  ADMIN_EMAIL: z.string().email(),
+  ADMIN_PASSWORD: z.string().min(8, "ADMIN_PASSWORD must be at least 8 characters"),
+  ADMIN_DISPLAY_NAME: z.string().min(1, "ADMIN_DISPLAY_NAME is required"),
 });
 
 type EnvShape = z.infer<typeof envSchema>;

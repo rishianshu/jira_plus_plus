@@ -1,0 +1,1567 @@
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
+import { gql, useLazyQuery, useMutation, useQuery } from "@apollo/client";
+import {
+  BarChart3,
+  Link2,
+  LogOut,
+  PlusCircle,
+  ServerCog,
+  ShieldCheck,
+  Users,
+} from "lucide-react";
+import { Button } from "../components/ui/button";
+import { Modal } from "../components/ui/modal";
+import { useAuth } from "../providers/AuthProvider";
+
+const ADMIN_CONSOLE_QUERY = gql`
+  query AdminConsoleData {
+    users {
+      id
+      email
+      displayName
+      role
+      createdAt
+    }
+    jiraSites {
+      id
+      alias
+      baseUrl
+      adminEmail
+      createdAt
+      projects {
+        id
+        jiraId
+        key
+        name
+        isActive
+        createdAt
+        trackedUsers {
+          id
+          jiraAccountId
+          displayName
+          email
+          avatarUrl
+          isTracked
+        }
+      }
+    }
+  }
+`;
+
+const USER_LINKS_QUERY = gql`
+  query UserProjectLinks($userId: ID!) {
+    userProjectLinks(userId: $userId) {
+      id
+      jiraAccountId
+      createdAt
+      project {
+        id
+        key
+        name
+        site {
+          id
+          alias
+        }
+      }
+    }
+  }
+`;
+
+const REGISTER_SITE_MUTATION = gql`
+  mutation RegisterJiraSite($input: RegisterJiraSiteInput!) {
+    registerJiraSite(input: $input) {
+      id
+      alias
+    }
+  }
+`;
+
+const REGISTER_PROJECT_MUTATION = gql`
+  mutation RegisterJiraProject($input: RegisterJiraProjectInput!) {
+    registerJiraProject(input: $input) {
+      id
+      name
+    }
+  }
+`;
+
+const CREATE_USER_MUTATION = gql`
+  mutation CreateUser($input: CreateUserInput!) {
+    createUser(input: $input) {
+      id
+      email
+      displayName
+      role
+    }
+  }
+`;
+
+const MAP_USER_MUTATION = gql`
+  mutation MapUserToProject($input: MapUserInput!) {
+    mapUserToProject(input: $input) {
+      id
+      jiraAccountId
+    }
+  }
+`;
+
+const UNLINK_MUTATION = gql`
+  mutation UnlinkUserFromProject($linkId: ID!) {
+    unlinkUserFromProject(linkId: $linkId)
+  }
+`;
+
+const PROJECT_OPTIONS_QUERY = gql`
+  query JiraProjectOptions($siteId: ID!) {
+    jiraProjectOptions(siteId: $siteId) {
+      id
+      key
+      name
+      projectTypeKey
+      lead
+    }
+  }
+`;
+
+const PROJECT_USERS_OPTIONS_QUERY = gql`
+  query JiraProjectUserOptions($siteId: ID!, $projectKey: String!) {
+    jiraProjectUserOptions(siteId: $siteId, projectKey: $projectKey) {
+      accountId
+      displayName
+      email
+      avatarUrl
+    }
+  }
+`;
+
+const TRACKED_USERS_QUERY = gql`
+  query ProjectTrackedUsers($projectId: ID!) {
+    projectTrackedUsers(projectId: $projectId) {
+      id
+      jiraAccountId
+      displayName
+      email
+      avatarUrl
+      isTracked
+    }
+  }
+`;
+
+const SET_TRACKED_USERS_MUTATION = gql`
+  mutation SetProjectTrackedUsers($input: SetProjectTrackedUsersInput!) {
+    setProjectTrackedUsers(input: $input) {
+      id
+      jiraAccountId
+      displayName
+      email
+      avatarUrl
+      isTracked
+    }
+  }
+`;
+
+type ProjectUserDetail = {
+  accountId: string;
+  displayName: string;
+  email?: string | null;
+  avatarUrl?: string | null;
+};
+
+type TrackedUserPayload = {
+  jiraAccountId: string;
+  displayName: string;
+  email?: string | null;
+  avatarUrl?: string | null;
+  isTracked: boolean;
+};
+
+type AdminConsoleData = {
+  users: Array<{
+    id: string;
+    email: string;
+    displayName: string;
+    role: string;
+    createdAt: string;
+  }>;
+  jiraSites: Array<{
+    id: string;
+    alias: string;
+    baseUrl: string;
+    adminEmail: string;
+    createdAt: string;
+    projects: Array<{
+      id: string;
+      jiraId: string;
+      key: string;
+      name: string;
+      isActive: boolean;
+      createdAt: string;
+      trackedUsers: Array<{
+        id: string;
+        jiraAccountId: string;
+        displayName: string;
+        email: string | null;
+        avatarUrl: string | null;
+        isTracked: boolean;
+      }>;
+    }>;
+  }>;
+};
+
+type UserProjectLinksData = {
+  userProjectLinks: Array<{
+    id: string;
+    jiraAccountId: string;
+    createdAt: string;
+    project: {
+      id: string;
+      key: string;
+      name: string;
+      site: {
+        id: string;
+        alias: string;
+      };
+    };
+  }>;
+};
+
+type ProjectOptionsData = {
+  jiraProjectOptions: Array<{
+    id: string;
+    key: string;
+    name: string;
+    projectTypeKey?: string | null;
+    lead?: string | null;
+  }>;
+};
+
+type ProjectUserOptionsData = {
+  jiraProjectUserOptions: Array<ProjectUserDetail>;
+};
+
+type TrackedUsersData = {
+  projectTrackedUsers: Array<{
+    id: string;
+    jiraAccountId: string;
+    displayName: string;
+    email: string | null;
+    avatarUrl: string | null;
+    isTracked: boolean;
+  }>;
+};
+
+type ModalType = "site" | "user" | "project" | "mapping" | null;
+
+const sidebarSections = [
+  { id: "overview", label: "Overview", icon: <ShieldCheck className="h-4 w-4" /> },
+  { id: "sites", label: "Jira Sites", icon: <ServerCog className="h-4 w-4" /> },
+  { id: "projects", label: "Projects", icon: <BarChart3 className="h-4 w-4" /> },
+  { id: "users", label: "Directory", icon: <Users className="h-4 w-4" /> },
+  { id: "mappings", label: "Account Mapping", icon: <Link2 className="h-4 w-4" /> },
+] as const;
+
+const dateFormatter = new Intl.DateTimeFormat("en-US", { dateStyle: "medium" });
+const formatDate = (value: string) => {
+  try {
+    return dateFormatter.format(new Date(value));
+  } catch {
+    return value;
+  }
+};
+
+export function AdminConsolePage() {
+  const { user, logout } = useAuth();
+  const { data, loading, error, refetch } = useQuery<AdminConsoleData>(ADMIN_CONSOLE_QUERY);
+  const [activeModal, setActiveModal] = useState<ModalType>(null);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [projectUsersModal, setProjectUsersModal] = useState<
+    | {
+        projectId: string;
+        projectKey: string;
+        projectName: string;
+        siteId: string;
+        siteAlias: string;
+      }
+    | null
+  >(null);
+
+  const [fetchLinks, { data: linkData, loading: linksLoading, refetch: refetchLinks }] =
+    useLazyQuery<UserProjectLinksData>(USER_LINKS_QUERY);
+
+  useEffect(() => {
+    if (selectedUserId) {
+      void fetchLinks({ variables: { userId: selectedUserId } });
+    }
+  }, [fetchLinks, selectedUserId]);
+
+  const sites = data?.jiraSites ?? ([] as AdminConsoleData["jiraSites"]);
+  const users = data?.users ?? ([] as AdminConsoleData["users"]);
+  const projects = useMemo(
+    () =>
+      sites.flatMap((site) =>
+        site.projects.map((project) => ({
+          ...project,
+          site,
+          siteId: site.id,
+          siteAlias: site.alias,
+          trackedUsers: project.trackedUsers ?? [],
+        })),
+      ),
+    [sites],
+  );
+
+  const selectedUser = selectedUserId
+    ? users.find((candidate) => candidate.id === selectedUserId) ?? null
+    : null;
+
+  const stats = [
+    { label: "Jira Sites", value: sites.length, caption: "Connected sources" },
+    { label: "Projects", value: projects.length, caption: "Curated workstreams" },
+    { label: "Platform Users", value: users.length, caption: "Provisioned teammates" },
+  ];
+
+  return (
+    <div className="flex flex-col gap-8 lg:flex-row">
+      <aside className="hidden w-56 flex-shrink-0 lg:block">
+        <nav className="sticky top-28 flex flex-col gap-1 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm shadow-slate-200/60 dark:border-slate-800 dark:bg-slate-900 dark:shadow-slate-950/60">
+          {sidebarSections.map((section) => (
+            <a
+              key={section.id}
+              href={`#${section.id}`}
+              className="inline-flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-50"
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 dark:border-slate-700 dark:text-slate-300">
+                {section.icon}
+              </span>
+              {section.label}
+            </a>
+          ))}
+        </nav>
+      </aside>
+      <div className="flex-1 space-y-12">
+        <section
+          id="overview"
+          className="rounded-3xl border border-slate-200 bg-white p-8 shadow-lg shadow-slate-200/60 dark:border-slate-800 dark:bg-slate-900 dark:shadow-slate-950/70"
+        >
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div className="space-y-2">
+              <h2 className="text-3xl font-semibold text-slate-900 dark:text-slate-100">
+                Admin Console
+              </h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Connect Jira sites, curate projects, and manage platform access with enterprise-grade
+                controls.
+              </p>
+              <div className="inline-flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                Signed in as{" "}
+                <span className="font-medium text-slate-700 dark:text-slate-200">
+                  {user?.displayName}
+                </span>
+              </div>
+            </div>
+            <Button variant="outline" onClick={() => void logout()}>
+              <LogOut className="mr-2 h-4 w-4" />
+              Sign out
+            </Button>
+          </div>
+          <div className="mt-8 grid gap-4 sm:grid-cols-3">
+            {stats.map((stat) => (
+              <OverviewCard
+                key={stat.label}
+                label={stat.label}
+                value={stat.value}
+                caption={stat.caption}
+              />
+            ))}
+          </div>
+        </section>
+
+        <section
+          id="sites"
+          className="rounded-3xl border border-slate-200 bg-white p-8 shadow-lg shadow-slate-200/60 dark:border-slate-800 dark:bg-slate-900 dark:shadow-slate-950/70"
+        >
+          <SectionHeader
+            title="Jira sites"
+            description="Register Jira Cloud or Server instances, encrypted with AES-256-GCM before storage."
+            action={
+              <Button onClick={() => setActiveModal("site")}>
+                <PlusCircle className="mr-2 h-4 w-4" />
+                Add Jira site
+              </Button>
+            }
+          />
+          {loading ? (
+            <EmptyState message="Loading sites..." />
+          ) : sites.length === 0 ? (
+            <EmptyState message="No Jira sites registered yet." />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-200 text-left text-sm dark:divide-slate-800">
+                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-900/40 dark:text-slate-400">
+                  <tr>
+                    <th className="px-4 py-3 font-semibold">Alias</th>
+                    <th className="px-4 py-3 font-semibold">Base URL</th>
+                    <th className="px-4 py-3 font-semibold">Admin email</th>
+                    <th className="px-4 py-3 font-semibold">Projects</th>
+                    <th className="px-4 py-3 font-semibold">Registered</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                  {sites.map((site) => (
+                    <tr key={site.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/60">
+                      <td className="px-4 py-3 font-medium text-slate-900 dark:text-slate-100">
+                        {site.alias}
+                      </td>
+                      <td className="px-4 py-3">
+                        <a
+                          className="text-slate-600 underline transition hover:text-slate-800 dark:text-slate-300 dark:hover:text-slate-100"
+                          href={site.baseUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {site.baseUrl}
+                        </a>
+                      </td>
+                      <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
+                        {site.adminEmail}
+                      </td>
+                      <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
+                        {site.projects.length}
+                      </td>
+                      <td className="px-4 py-3 text-slate-500 dark:text-slate-400">
+                        {formatDate(site.createdAt)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section
+          id="projects"
+          className="rounded-3xl border border-slate-200 bg-white p-8 shadow-lg shadow-slate-200/60 dark:border-slate-800 dark:bg-slate-900 dark:shadow-slate-950/70"
+        >
+          <SectionHeader
+            title="Projects"
+            description="Curate the Jira projects Jira++ should sync. Disable unused projects to reduce noise."
+            action={
+              <Button onClick={() => setActiveModal("project")} disabled={sites.length === 0}>
+                <PlusCircle className="mr-2 h-4 w-4" />
+                Register project
+              </Button>
+            }
+          />
+          {sites.length === 0 ? (
+            <EmptyState message="Connect a Jira site before registering projects." />
+          ) : projects.length === 0 ? (
+            <EmptyState message="No projects registered yet. Bring in the first one to unlock boards." />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-200 text-left text-sm dark:divide-slate-800">
+                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-900/40 dark:text-slate-400">
+                  <tr>
+                    <th className="px-4 py-3 font-semibold">Project</th>
+                    <th className="px-4 py-3 font-semibold">Site</th>
+                    <th className="px-4 py-3 font-semibold">Key</th>
+                    <th className="px-4 py-3 font-semibold">Jira ID</th>
+                    <th className="px-4 py-3 font-semibold">Tracked users</th>
+                    <th className="px-4 py-3 font-semibold">Added</th>
+                    <th className="px-4 py-3 font-semibold text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                  {projects.map((project) => (
+                    <tr
+                      key={project.id}
+                      className="hover:bg-slate-50/60 dark:hover:bg-slate-800/60"
+                    >
+                      <td className="px-4 py-3 font-medium text-slate-900 dark:text-slate-100">
+                        {project.name}
+                      </td>
+                      <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
+                        {project.siteAlias}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs text-slate-500 dark:text-slate-400">
+                        {project.key}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs text-slate-500 dark:text-slate-400">
+                        {project.jiraId}
+                      </td>
+                      <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
+                        {project.trackedUsers.filter((user) => user.isTracked).length}
+                      </td>
+                      <td className="px-4 py-3 text-slate-500 dark:text-slate-400">
+                        {formatDate(project.createdAt)}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            setProjectUsersModal({
+                              projectId: project.id,
+                              projectKey: project.key,
+                              projectName: project.name,
+                              siteId: project.siteId,
+                              siteAlias: project.siteAlias,
+                            })
+                          }
+                        >
+                          Manage Jira users
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section
+          id="users"
+          className="rounded-3xl border border-slate-200 bg-white p-8 shadow-lg shadow-slate-200/60 dark:border-slate-800 dark:bg-slate-900 dark:shadow-slate-950/70"
+        >
+          <SectionHeader
+            title="Directory"
+            description="Provision teammates with scoped access. Only admins can invite or elevate users."
+            action={
+              <Button onClick={() => setActiveModal("user")}>
+                <PlusCircle className="mr-2 h-4 w-4" />
+                Invite user
+              </Button>
+            }
+          />
+          {loading ? (
+            <EmptyState message="Loading users..." />
+          ) : users.length === 0 ? (
+            <EmptyState message="No users yet. Invite your delivery leads and developers." />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-200 text-left text-sm dark:divide-slate-800">
+                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-900/40 dark:text-slate-400">
+                  <tr>
+                    <th className="px-4 py-3 font-semibold">Name</th>
+                    <th className="px-4 py-3 font-semibold">Email</th>
+                    <th className="px-4 py-3 font-semibold">Role</th>
+                    <th className="px-4 py-3 font-semibold">Joined</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                  {users.map((entry) => (
+                    <tr
+                      key={entry.id}
+                      className="hover:bg-slate-50/60 dark:hover:bg-slate-800/60"
+                    >
+                      <td className="px-4 py-3 font-medium text-slate-900 dark:text-slate-100">
+                        {entry.displayName}
+                      </td>
+                      <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{entry.email}</td>
+                      <td className="px-4 py-3">
+                        <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                          {entry.role.toLowerCase()}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-slate-500 dark:text-slate-400">
+                        {formatDate(entry.createdAt)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section
+          id="mappings"
+          className="rounded-3xl border border-slate-200 bg-white p-8 shadow-lg shadow-slate-200/60 dark:border-slate-800 dark:bg-slate-900 dark:shadow-slate-950/70"
+        >
+          <SectionHeader
+            title="Account mapping"
+            description="Map Jira accounts to Jira++ users, enabling unified analytics across multiple sites."
+            action={
+              <Button
+                onClick={() => setActiveModal("mapping")}
+                disabled={!selectedUserId || projects.length === 0}
+              >
+                <PlusCircle className="mr-2 h-4 w-4" />
+                Map Jira account
+              </Button>
+            }
+          />
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <label className="flex flex-1 flex-col gap-2 text-sm text-slate-600 dark:text-slate-300">
+              <span className="font-medium text-slate-700 dark:text-slate-200">
+                Choose a platform user
+              </span>
+              <select
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-slate-600"
+                value={selectedUserId ?? ""}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setSelectedUserId(value || null);
+                  if (value) {
+                    void fetchLinks({ variables: { userId: value } });
+                  }
+                }}
+              >
+                <option value="">Select user</option>
+                {users.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.displayName} ({entry.email})
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {selectedUserId ? (
+            linksLoading ? (
+              <EmptyState message="Loading mappings..." />
+            ) : linkData?.userProjectLinks?.length ? (
+              <div className="mt-6 overflow-x-auto">
+                <table className="min-w-full divide-y divide-slate-200 text-left text-sm dark:divide-slate-800">
+                  <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-900/40 dark:text-slate-400">
+                    <tr>
+                      <th className="px-4 py-3 font-semibold">Project</th>
+                      <th className="px-4 py-3 font-semibold">Site</th>
+                      <th className="px-4 py-3 font-semibold">Jira account</th>
+                      <th className="px-4 py-3 font-semibold">Mapped</th>
+                      <th className="px-4 py-3 font-semibold">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {linkData.userProjectLinks.map((link) => (
+                      <tr key={link.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/60">
+                        <td className="px-4 py-3 font-medium text-slate-900 dark:text-slate-100">
+                          {link.project.name}
+                        </td>
+                        <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
+                          {link.project.site.alias}
+                        </td>
+                        <td className="px-4 py-3 font-mono text-xs text-slate-500 dark:text-slate-400">
+                          {link.jiraAccountId}
+                        </td>
+                        <td className="px-4 py-3 text-slate-500 dark:text-slate-400">
+                          {formatDate(link.createdAt)}
+                        </td>
+                        <td className="px-4 py-3">
+                          <UnlinkButton
+                            linkId={link.id}
+                            onSuccess={async () => {
+                              if (selectedUserId) {
+                                await fetchLinks({ variables: { userId: selectedUserId } });
+                              }
+                            }}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <EmptyState message="No mappings yet for this user." />
+            )
+          ) : (
+            <EmptyState message="Select a user to review mappings." />
+          )}
+        </section>
+      </div>
+
+      <RegisterSiteModal
+        open={activeModal === "site"}
+        onClose={() => setActiveModal(null)}
+        onCompleted={() => {
+          setActiveModal(null);
+          void refetch();
+        }}
+      />
+      <RegisterProjectModal
+        open={activeModal === "project"}
+        onClose={() => setActiveModal(null)}
+        sites={sites}
+        onCompleted={() => {
+          setActiveModal(null);
+          void refetch();
+        }}
+      />
+      <CreateUserModal
+        open={activeModal === "user"}
+        onClose={() => setActiveModal(null)}
+        onCompleted={() => {
+          setActiveModal(null);
+          void refetch();
+        }}
+      />
+      <MapUserModal
+        open={activeModal === "mapping"}
+        onClose={() => setActiveModal(null)}
+        selectedUser={selectedUser}
+        projects={projects}
+        onCompleted={async () => {
+          setActiveModal(null);
+          void refetch();
+          if (selectedUserId) {
+            await refetchLinks?.({ userId: selectedUserId });
+          }
+        }}
+      />
+      <ProjectUsersModal
+        open={projectUsersModal !== null}
+        project={projectUsersModal}
+        onClose={() => setProjectUsersModal(null)}
+        onCompleted={async () => {
+          setProjectUsersModal(null);
+          await refetch();
+        }}
+      />
+      {error ? (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200">
+          {error.message}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SectionHeader({
+  title,
+  description,
+  action,
+}: {
+  title: string;
+  description: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-4 border-b border-slate-200 pb-6 dark:border-slate-800 md:flex-row md:items-center md:justify-between">
+      <div className="space-y-1">
+        <h3 className="text-xl font-semibold text-slate-900 dark:text-slate-100">{title}</h3>
+        <p className="text-sm text-slate-500 dark:text-slate-400">{description}</p>
+      </div>
+      {action}
+    </div>
+  );
+}
+
+function OverviewCard({
+  label,
+  value,
+  caption,
+}: {
+  label: string;
+  value: number;
+  caption: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/60 dark:border-slate-800 dark:bg-slate-900 dark:shadow-slate-950/60">
+      <p className="text-sm font-medium text-slate-500 dark:text-slate-400">{label}</p>
+      <p className="mt-3 text-3xl font-semibold text-slate-900 dark:text-slate-100">{value}</p>
+      <p className="mt-2 text-xs uppercase tracking-wide text-slate-400 dark:text-slate-500">
+        {caption}
+      </p>
+    </div>
+  );
+}
+
+function EmptyState({ message }: { message: string }) {
+  return (
+    <div className="mt-6 rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 p-6 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-400">
+      {message}
+    </div>
+  );
+}
+
+function RegisterSiteModal({
+  open,
+  onClose,
+  onCompleted,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCompleted: () => void;
+}) {
+  const [alias, setAlias] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [adminEmail, setAdminEmail] = useState("");
+  const [apiToken, setApiToken] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [registerSite, { loading }] = useMutation(REGISTER_SITE_MUTATION);
+
+  useEffect(() => {
+    if (!open) {
+      setAlias("");
+      setBaseUrl("");
+      setAdminEmail("");
+      setApiToken("");
+      setMessage(null);
+    }
+  }, [open]);
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setMessage(null);
+    void registerSite({
+      variables: { input: { alias, baseUrl, adminEmail, apiToken } },
+      onCompleted,
+      onError: (mutationError) => {
+        setMessage(mutationError.message);
+      },
+    });
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Register Jira site"
+      description="Jira++ will encrypt API credentials before persisting them. Test connections are on the roadmap."
+    >
+      <form className="space-y-4" onSubmit={handleSubmit}>
+        <Input label="Alias" value={alias} onChange={setAlias} placeholder="Acme Cloud Jira" required />
+        <Input
+          label="Base URL"
+          value={baseUrl}
+          onChange={setBaseUrl}
+          placeholder="https://acme.atlassian.net"
+          required
+        />
+        <Input
+          label="Admin email"
+          value={adminEmail}
+          onChange={setAdminEmail}
+          placeholder="admin@acme.com"
+          type="email"
+          required
+        />
+        <Input
+          label="API token"
+          value={apiToken}
+          onChange={setApiToken}
+          placeholder="••••••••"
+          type="password"
+          required
+        />
+        {message ? <InlineMessage tone="error">{message}</InlineMessage> : null}
+        <div className="flex justify-end">
+          <Button type="submit" disabled={loading}>
+            {loading ? "Saving…" : "Register site"}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function RegisterProjectModal({
+  open,
+  onClose,
+  onCompleted,
+  sites,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCompleted: () => void;
+  sites: Array<{
+    id: string;
+    alias: string;
+  }>;
+}) {
+  const [siteId, setSiteId] = useState<string>("");
+  const [selectedOptionId, setSelectedOptionId] = useState<string>("");
+  const [jiraId, setJiraId] = useState("");
+  const [key, setKey] = useState("");
+  const [name, setName] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [registerProject, { loading }] = useMutation(REGISTER_PROJECT_MUTATION);
+  const [loadOptions, { data: optionsData, loading: optionsLoading, error: optionsError }] =
+    useLazyQuery<ProjectOptionsData>(PROJECT_OPTIONS_QUERY);
+  const projectOptions = optionsData?.jiraProjectOptions ?? ([] as ProjectOptionsData["jiraProjectOptions"]);
+
+  useEffect(() => {
+    if (!open) {
+      setSiteId("");
+      setSelectedOptionId("");
+      setJiraId("");
+      setKey("");
+      setName("");
+      setMessage(null);
+      return;
+    }
+
+    const defaultSite = sites[0];
+    if (defaultSite) {
+      setSiteId(defaultSite.id);
+      void loadOptions({ variables: { siteId: defaultSite.id } });
+    }
+  }, [loadOptions, open, sites]);
+
+  useEffect(() => {
+    if (!open || !siteId) {
+      return;
+    }
+    setSelectedOptionId("");
+    setJiraId("");
+    setKey("");
+    setName("");
+    void loadOptions({ variables: { siteId } });
+  }, [loadOptions, open, siteId]);
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setMessage(null);
+    if (!siteId) {
+      setMessage("Select a Jira site.");
+      return;
+    }
+    void registerProject({
+      variables: { input: { siteId, jiraId, key, name } },
+      onCompleted,
+      onError: (mutationError) => {
+        setMessage(mutationError.message);
+      },
+    });
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Register Jira project"
+      description="Limit intake to the projects you want surfaced in Jira++. Auto-discovery arrives in a future release."
+    >
+      <form className="space-y-4" onSubmit={handleSubmit}>
+        <label className="flex flex-col gap-2 text-sm text-slate-600 dark:text-slate-300">
+          <span className="font-medium text-slate-700 dark:text-slate-200">Jira site</span>
+          <select
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-slate-600"
+            value={siteId}
+            onChange={(event) => setSiteId(event.target.value)}
+          >
+            {sites.length === 0 ? (
+              <option value="">No sites available</option>
+            ) : (
+              sites.map((site) => (
+                <option key={site.id} value={site.id}>
+                  {site.alias}
+                </option>
+              ))
+            )}
+          </select>
+        </label>
+        <label className="flex flex-col gap-2 text-sm text-slate-600 dark:text-slate-300">
+          <span className="font-medium text-slate-700 dark:text-slate-200">Jira project</span>
+          <select
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-slate-600"
+            value={selectedOptionId}
+            onChange={(event) => {
+              const value = event.target.value;
+              setSelectedOptionId(value);
+              if (!value) {
+                setJiraId("");
+                setKey("");
+                setName("");
+                return;
+              }
+              const selected = projectOptions.find((option) => option.id === value);
+              if (selected) {
+                setJiraId(selected.id);
+                setKey(selected.key);
+                setName(selected.name);
+              }
+            }}
+          >
+            <option value="">Manual entry</option>
+            {projectOptions.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.name} ({option.key})
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            {optionsLoading
+              ? "Loading projects from Jira..."
+              : optionsError
+                ? optionsError.message
+                : "Pick a project discovered via the Jira API or stay on manual entry."}
+          </p>
+        </label>
+        <Input
+          label="Jira project ID"
+          value={jiraId}
+          onChange={setJiraId}
+          placeholder="10001"
+          required
+        />
+        <Input label="Key" value={key} onChange={setKey} placeholder="PROJ" required />
+        <Input
+          label="Name"
+          value={name}
+          onChange={setName}
+          placeholder="Project Mars"
+          required
+        />
+        {message ? <InlineMessage tone="error">{message}</InlineMessage> : null}
+        <div className="flex justify-end">
+          <Button type="submit" disabled={loading || sites.length === 0}>
+            {loading ? "Saving…" : "Register project"}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function CreateUserModal({
+  open,
+  onClose,
+  onCompleted,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCompleted: () => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [role, setRole] = useState<"ADMIN" | "USER">("USER");
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [createUser, { loading }] = useMutation(CREATE_USER_MUTATION);
+
+  useEffect(() => {
+    if (!open) {
+      setEmail("");
+      setDisplayName("");
+      setRole("USER");
+      setPassword("");
+      setMessage(null);
+    }
+  }, [open]);
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setMessage(null);
+    void createUser({
+      variables: { input: { email, displayName, password, role } },
+      onCompleted,
+      onError: (mutationError) => {
+        setMessage(mutationError.message);
+      },
+    });
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Invite platform user"
+      description="Share the temporary password securely. Users will rotate their credentials on first sign-in once self-service is enabled."
+    >
+      <form className="space-y-4" onSubmit={handleSubmit}>
+        <Input
+          label="Email"
+          value={email}
+          onChange={setEmail}
+          type="email"
+          placeholder="teammate@acme.com"
+          required
+        />
+        <Input
+          label="Display name"
+          value={displayName}
+          onChange={setDisplayName}
+          placeholder="Taylor Jenkins"
+          required
+        />
+        <Input
+          label="Temporary password"
+          value={password}
+          onChange={setPassword}
+          placeholder="Generate a strong passphrase"
+          required
+        />
+        <label className="flex flex-col gap-2 text-sm text-slate-600 dark:text-slate-300">
+          <span className="font-medium text-slate-700 dark:text-slate-200">Role</span>
+          <select
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-slate-600"
+            value={role}
+            onChange={(event) => setRole(event.target.value as "ADMIN" | "USER")}
+          >
+            <option value="USER">User</option>
+            <option value="ADMIN">Admin</option>
+          </select>
+        </label>
+        {message ? <InlineMessage tone="error">{message}</InlineMessage> : null}
+        <div className="flex justify-end">
+          <Button type="submit" disabled={loading}>
+            {loading ? "Creating…" : "Create user"}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function MapUserModal({
+  open,
+  onClose,
+  onCompleted,
+  selectedUser,
+  projects,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCompleted: () => Promise<void> | void;
+  selectedUser: { id: string; displayName: string; email: string } | null;
+  projects: Array<{
+    id: string;
+    name: string;
+    key: string;
+    siteAlias: string;
+    trackedUsers: Array<{
+      jiraAccountId: string;
+      displayName: string;
+      email?: string | null;
+      avatarUrl?: string | null;
+      isTracked: boolean;
+    }>;
+  }>;
+}) {
+  const [projectId, setProjectId] = useState<string>("");
+  const [jiraAccountId, setJiraAccountId] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [mapUser, { loading }] = useMutation(MAP_USER_MUTATION);
+  const selectedProject = useMemo(
+    () => projects.find((entry) => entry.id === projectId) ?? null,
+    [projectId, projects],
+  );
+  const trackedUsers = useMemo(
+    () => selectedProject?.trackedUsers.filter((user) => user.isTracked) ?? [],
+    [selectedProject],
+  );
+
+  useEffect(() => {
+    if (!open) {
+      setProjectId("");
+      setJiraAccountId("");
+      setMessage(null);
+    } else if (projects.length > 0) {
+      const defaultProject = projects[0];
+      setProjectId(defaultProject.id);
+      const tracked = defaultProject.trackedUsers.filter((user) => user.isTracked);
+      if (tracked.length > 0) {
+        setJiraAccountId(tracked[0].jiraAccountId);
+      }
+    }
+  }, [open, projects]);
+
+  useEffect(() => {
+    if (!projectId) {
+      return;
+    }
+    const project = projects.find((entry) => entry.id === projectId);
+    const tracked = project?.trackedUsers.filter((user) => user.isTracked) ?? [];
+    if (tracked.length > 0 && (!jiraAccountId || !tracked.some((user) => user.jiraAccountId === jiraAccountId))) {
+      setJiraAccountId(tracked[0].jiraAccountId);
+    }
+  }, [jiraAccountId, projectId, projects]);
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setMessage(null);
+    if (!selectedUser) {
+      setMessage("Select a user from the mapping section before adding links.");
+      return;
+    }
+    void mapUser({
+      variables: {
+        input: {
+          userId: selectedUser.id,
+          projectId,
+          jiraAccountId,
+        },
+      },
+      onCompleted,
+      onError: (mutationError) => {
+        setMessage(mutationError.message);
+      },
+    });
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Map Jira account"
+      description="Associate Jira account IDs to merge worklogs, comments, and sprint insights for this teammate."
+    >
+      <form className="space-y-4" onSubmit={handleSubmit}>
+        <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+          {selectedUser ? (
+            <p>
+              Mapping for <strong>{selectedUser.displayName}</strong> ({selectedUser.email})
+            </p>
+          ) : (
+            <p>Select a user in the Account Mapping section first.</p>
+          )}
+        </div>
+        <label className="flex flex-col gap-2 text-sm text-slate-600 dark:text-slate-300">
+          <span className="font-medium text-slate-700 dark:text-slate-200">Jira project</span>
+          <select
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-slate-600"
+            value={projectId}
+            onChange={(event) => setProjectId(event.target.value)}
+          >
+            {projects.length === 0 ? (
+              <option value="">No projects available</option>
+            ) : (
+              projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.siteAlias} · {project.key}
+                </option>
+              ))
+            )}
+          </select>
+        </label>
+        {trackedUsers.length > 0 ? (
+          <label className="flex flex-col gap-2 text-sm text-slate-600 dark:text-slate-300">
+            <span className="font-medium text-slate-700 dark:text-slate-200">
+              Tracked Jira users
+            </span>
+            <select
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-slate-600"
+              value={trackedUsers.some((user) => user.jiraAccountId === jiraAccountId) ? jiraAccountId : ""}
+              onChange={(event) => setJiraAccountId(event.target.value)}
+            >
+              <option value="">Select tracked user</option>
+              {trackedUsers.map((user) => (
+                <option key={user.jiraAccountId} value={user.jiraAccountId}>
+                  {user.displayName}
+                </option>
+              ))}
+            </select>
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              Choose from tracked Jira accounts or enter an ID manually below.
+            </span>
+          </label>
+        ) : (
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            No tracked Jira users yet. Use “Manage Jira users” within the Projects section to configure
+            the watchlist.
+          </p>
+        )}
+        <Input
+          label="Jira account ID"
+          value={jiraAccountId}
+          onChange={setJiraAccountId}
+          placeholder="557058:abcd-1234"
+          required
+        />
+        {message ? <InlineMessage tone="error">{message}</InlineMessage> : null}
+        <div className="flex justify-end">
+          <Button type="submit" disabled={loading || !selectedUser || projects.length === 0}>
+            {loading ? "Saving…" : "Save mapping"}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function ProjectUsersModal({
+  open,
+  onClose,
+  onCompleted,
+  project,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCompleted: () => Promise<void> | void;
+  project:
+    | {
+        projectId: string;
+        projectKey: string;
+        projectName: string;
+        siteId: string;
+        siteAlias: string;
+      }
+    | null;
+}) {
+  const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(new Set());
+  const [message, setMessage] = useState<string | null>(null);
+  const [loadOptions, { data: optionsData, loading: optionsLoading, error: optionsError }] =
+    useLazyQuery<ProjectUserOptionsData>(PROJECT_USERS_OPTIONS_QUERY);
+  const { data: trackedData, loading: trackedLoading, refetch: refetchTracked } = useQuery<TrackedUsersData>(
+    TRACKED_USERS_QUERY,
+    {
+      variables: { projectId: project?.projectId ?? "" },
+      skip: !open || !project?.projectId,
+    },
+  );
+  const [setTrackedUsers, { loading: saving }] = useMutation(SET_TRACKED_USERS_MUTATION);
+
+  useEffect(() => {
+    if (!open || !project) {
+      return;
+    }
+    void loadOptions({ variables: { siteId: project.siteId, projectKey: project.projectKey } });
+  }, [loadOptions, open, project]);
+
+  useEffect(() => {
+    if (!open) {
+      setSelectedAccounts(new Set());
+      return;
+    }
+    const tracked = trackedData?.projectTrackedUsers ?? [];
+    setSelectedAccounts(
+      new Set(tracked.filter((user) => user.isTracked).map((user) => user.jiraAccountId)),
+    );
+  }, [open, trackedData]);
+
+  const suggestions = optionsData?.jiraProjectUserOptions ?? ([] as ProjectUserOptionsData["jiraProjectUserOptions"]);
+  const trackedUsers = trackedData?.projectTrackedUsers ?? ([] as TrackedUsersData["projectTrackedUsers"]);
+
+  const combined = useMemo(() => {
+    const map = new Map<string, ProjectUserDetail>();
+
+    for (const user of trackedUsers) {
+      map.set(user.jiraAccountId, {
+        accountId: user.jiraAccountId,
+        displayName: user.displayName,
+        email: user.email ?? null,
+        avatarUrl: user.avatarUrl ?? null,
+      });
+    }
+
+    for (const user of suggestions) {
+      const existing = map.get(user.accountId);
+      map.set(user.accountId, {
+        accountId: user.accountId,
+        displayName: user.displayName || existing?.displayName || user.accountId,
+        email: user.email ?? existing?.email ?? null,
+        avatarUrl: user.avatarUrl ?? existing?.avatarUrl ?? null,
+      });
+    }
+
+    return Array.from(map.values()).sort((a, b) =>
+      a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" }),
+    );
+  }, [suggestions, trackedUsers]);
+
+  const toggleAccount = (accountId: string) => {
+    setSelectedAccounts((prev) => {
+      const next = new Set(prev);
+      if (next.has(accountId)) {
+        next.delete(accountId);
+      } else {
+        next.add(accountId);
+      }
+      return next;
+    });
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!project) {
+      return;
+    }
+    setMessage(null);
+    const payload: TrackedUserPayload[] = Array.from(selectedAccounts).reduce<
+      TrackedUserPayload[]
+    >((acc, accountId) => {
+      const detail = combined.find((user) => user.accountId === accountId);
+      if (!detail) {
+        return acc;
+      }
+      acc.push({
+        jiraAccountId: detail.accountId,
+        displayName: detail.displayName,
+        email: detail.email ?? null,
+        avatarUrl: detail.avatarUrl ?? null,
+        isTracked: true,
+      });
+      return acc;
+    }, []);
+
+    try {
+      await setTrackedUsers({
+        variables: {
+          input: {
+            projectId: project.projectId,
+            users: payload,
+          },
+        },
+      });
+      await refetchTracked();
+      await onCompleted();
+    } catch (error: unknown) {
+      setMessage(error instanceof Error ? error.message : "Failed to update tracked users.");
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Manage Jira users"
+      description="Toggle which Jira accounts Jira++ should track for this project."
+      primaryAction={
+        <Button type="submit" form="project-users-form" disabled={saving}>
+          {saving ? "Saving…" : "Save selection"}
+        </Button>
+      }
+    >
+      <form id="project-users-form" className="space-y-4" onSubmit={handleSubmit}>
+        <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+          {project ? (
+            <p>
+              <strong>{project.projectName}</strong> ({project.projectKey}) · {project.siteAlias}
+            </p>
+          ) : (
+            <p>Select a project to manage tracked Jira users.</p>
+          )}
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Jira data refreshes live from your site. Accounts toggled on are eligible for boards and
+            analytics.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              if (project) {
+                void loadOptions({ variables: { siteId: project.siteId, projectKey: project.projectKey }, fetchPolicy: "network-only" });
+              }
+            }}
+          >
+            Refresh from Jira
+          </Button>
+        </div>
+        <div className="max-h-80 overflow-y-auto rounded-2xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+          {optionsLoading || trackedLoading ? (
+            <p className="p-4 text-sm text-slate-500 dark:text-slate-400">Loading Jira users…</p>
+          ) : combined.length === 0 ? (
+            <p className="p-4 text-sm text-slate-500 dark:text-slate-400">
+              No assignable users were returned for this project. Ensure the Jira API token has access to
+              view members.
+            </p>
+          ) : (
+            <ul className="divide-y divide-slate-200 text-sm dark:divide-slate-800">
+              {combined.map((user) => {
+                const checked = selectedAccounts.has(user.accountId);
+                return (
+                  <li key={user.accountId} className="flex items-center gap-4 px-4 py-3">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-500 dark:border-slate-600 dark:bg-slate-900"
+                      checked={checked}
+                      onChange={() => toggleAccount(user.accountId)}
+                    />
+                    <div className="flex-1">
+                      <p className="font-medium text-slate-800 dark:text-slate-100">
+                        {user.displayName}
+                      </p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        {user.accountId}
+                        {user.email ? ` · ${user.email}` : ""}
+                      </p>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+        {optionsError ? (
+          <InlineMessage tone="error">{optionsError.message}</InlineMessage>
+        ) : null}
+        {message ? <InlineMessage tone="error">{message}</InlineMessage> : null}
+      </form>
+    </Modal>
+  );
+}
+
+function UnlinkButton({ linkId, onSuccess }: { linkId: string; onSuccess: () => void }) {
+  const [unlink, { loading }] = useMutation(UNLINK_MUTATION);
+
+  const handleClick = () => {
+    void unlink({
+      variables: { linkId },
+      onCompleted: onSuccess,
+    });
+  };
+
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="border-red-200 text-red-600 hover:bg-red-50 dark:border-red-900/60 dark:text-red-200 dark:hover:bg-red-900/20"
+      onClick={handleClick}
+      disabled={loading}
+    >
+      Remove
+    </Button>
+  );
+}
+
+function Input({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+  required,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+  type?: string;
+  required?: boolean;
+}) {
+  return (
+    <label className="flex flex-col gap-2 text-sm text-slate-600 dark:text-slate-300">
+      <span className="font-medium text-slate-700 dark:text-slate-200">{label}</span>
+      <input
+        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:ring-slate-600"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        type={type}
+        required={required}
+      />
+    </label>
+  );
+}
+
+function InlineMessage({
+  children,
+  tone = "info",
+}: {
+  children: ReactNode;
+  tone?: "info" | "error";
+}) {
+  const styles =
+    tone === "error"
+      ? "border-red-200 bg-red-50 text-red-600 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200"
+      : "border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-300";
+  return (
+    <p className={`rounded-lg border px-3 py-2 text-sm ${styles}`}>
+      {children}
+    </p>
+  );
+}

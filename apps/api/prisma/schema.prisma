@@ -7,14 +7,37 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  ADMIN
+  USER
+}
+
+enum CredentialType {
+  LOCAL
+}
+
 model User {
   id        String   @id @default(uuid())
   email     String   @unique
   displayName String
+  role       Role     @default(USER)
+  credential Credential?
   issues    Issue[]
   summaries DailySummary[]
+  projectLinks UserProjectLink[]
+  sitesCreated JiraSite[] @relation("SiteCreator")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model Credential {
+  id         String          @id @default(uuid())
+  type       CredentialType
+  secretHash String
+  user       User            @relation(fields: [userId], references: [id])
+  userId     String          @unique
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
 }
 
 model Issue {
@@ -62,4 +85,62 @@ model DailySummary {
   today     String?
   blockers  String?
   generatedAt DateTime @default(now())
+}
+
+model JiraSite {
+  id             String      @id @default(uuid())
+  alias          String      @unique
+  baseUrl        String      @unique
+  adminEmail     String
+  tokenCipher    String
+  createdBy      User?       @relation("SiteCreator", fields: [createdById], references: [id])
+  createdById    String?
+  projects       JiraProject[]
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+}
+
+model JiraProject {
+  id           String           @id @default(uuid())
+  jiraId       String
+  key          String
+  name         String
+  site         JiraSite         @relation(fields: [siteId], references: [id])
+  siteId       String
+  isActive     Boolean          @default(true)
+  accountLinks UserProjectLink[]
+  trackedUsers ProjectTrackedUser[]
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@unique([siteId, jiraId])
+  @@unique([siteId, key])
+}
+
+model UserProjectLink {
+  id            String      @id @default(uuid())
+  user          User        @relation(fields: [userId], references: [id])
+  userId        String
+  project       JiraProject @relation(fields: [projectId], references: [id])
+  projectId     String
+  jiraAccountId String
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@unique([userId, projectId])
+}
+
+model ProjectTrackedUser {
+  id           String       @id @default(uuid())
+  project      JiraProject  @relation(fields: [projectId], references: [id])
+  projectId    String
+  jiraAccountId String
+  displayName  String
+  email        String?
+  avatarUrl    String?
+  isTracked    Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@unique([projectId, jiraAccountId])
 }
