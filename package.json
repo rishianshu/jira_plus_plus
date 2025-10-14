@@ -1,0 +1,13 @@
+{
+  "name": "jira-plus-plus",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@8.15.3",
+  "scripts": {
+    "dev": "pnpm -r --filter './apps/*' dev",
+    "build": "pnpm -r --filter './apps/*' build",
+    "lint": "pnpm -r --filter './apps/*' lint",
+    "format": "pnpm -r --filter './apps/*' format",
+    "test": "pnpm -r --filter './apps/*' test"
+  }
+}

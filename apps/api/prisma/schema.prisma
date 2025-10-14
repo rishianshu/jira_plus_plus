@@ -1,0 +1,65 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  displayName String
+  issues    Issue[]
+  summaries DailySummary[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Issue {
+  id          String   @id @default(uuid())
+  jiraId      String   @unique
+  key         String
+  summary     String?
+  status      String
+  assignee    User?    @relation(fields: [assigneeId], references: [id])
+  assigneeId  String?
+  worklogs    Worklog[]
+  comments    Comment[]
+  sprint      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  jiraId    String   @unique
+  issue     Issue    @relation(fields: [issueId], references: [id])
+  issueId   String
+  author    String
+  body      String
+  createdAt DateTime @default(now())
+}
+
+model Worklog {
+  id          String   @id @default(uuid())
+  jiraId      String   @unique
+  issue       Issue    @relation(fields: [issueId], references: [id])
+  issueId     String
+  author      String
+  description String?
+  timeSpent   Int
+  loggedAt    DateTime
+  createdAt   DateTime @default(now())
+}
+
+model DailySummary {
+  id        String   @id @default(uuid())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  yesterday String?
+  today     String?
+  blockers  String?
+  generatedAt DateTime @default(now())
+}
