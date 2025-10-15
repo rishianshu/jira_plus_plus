@@ -1,7 +1,7 @@
 import type { IncomingMessage } from "http";
 import type { PrismaClient, Role } from "@prisma/client";
-import { prisma } from "./prisma";
-import { resolveUserFromRequest } from "./auth";
+import { prisma } from "./prisma.js";
+import { resolveUserFromRequest } from "./auth.js";
 
 export interface RequestContext {
   prisma: PrismaClient;

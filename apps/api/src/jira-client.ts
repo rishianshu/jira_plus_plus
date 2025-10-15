@@ -1,13 +1,13 @@
 import { GraphQLError } from "graphql";
 import type { PrismaClient, JiraSite } from "@prisma/client";
-import { decryptSecret } from "./auth";
+import { decryptSecret } from "./auth.js";
 
-interface JiraSiteAuth {
+export interface JiraSiteAuth {
   site: JiraSite;
   token: string;
 }
 
-async function resolveSiteAuth(prisma: PrismaClient, siteId: string): Promise<JiraSiteAuth> {
+export async function resolveSiteAuth(prisma: PrismaClient, siteId: string): Promise<JiraSiteAuth> {
   const site = await prisma.jiraSite.findUnique({
     where: { id: siteId },
   });
@@ -135,4 +135,85 @@ export async function fetchJiraProjectUsers(
     email: user.emailAddress ?? null,
     avatarUrl: user.avatarUrls?.["48x48"] ?? user.avatarUrls?.["24x24"] ?? null,
   }));
+}
+
+export interface JiraIssueSearchResponse {
+  issues: Array<{
+    id: string;
+    key: string;
+    fields: {
+      summary?: string;
+      status?: { name?: string } | null;
+      priority?: { name?: string } | null;
+      assignee?: {
+        accountId?: string;
+        displayName?: string;
+        emailAddress?: string;
+        avatarUrls?: Record<string, string>;
+      } | null;
+      updated?: string;
+      created?: string;
+    };
+  }>;
+  total: number;
+  nextPageToken: string;
+  isLast: boolean;
+  maxResults: number;
+}
+
+export async function searchJiraIssues(params: {
+  baseUrl: string;
+  adminEmail: string;
+  token: string;
+  jql: string;
+  nextPageToken?: string;
+  maxResults?: number;
+}): Promise<JiraIssueSearchResponse> {
+  const url = `${params.baseUrl.replace(/\/$/, "")}/rest/api/3/search/jql`;
+  const payload = {
+    method: 'POST',
+    headers: buildAuthHeaders(params.adminEmail, params.token),
+    body: JSON.stringify({
+      jql: params.jql,
+      nextPageToken: params.nextPageToken,
+      maxResults: params.maxResults ?? 100,
+      fields: ['summary', 'status', 'priority', 'assignee', 'updated', 'created'],
+    }),
+  };
+  console.log(url, params);
+  const response = await fetch(url, payload);
+
+  
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Jira search failed (${response.status}): ${message}`);
+  }
+
+  const data = (await response.json()) as JiraIssueSearchResponse;
+  return data;
+}
+
+export async function fetchJiraIssueDetail(params: {
+  baseUrl: string;
+  adminEmail: string;
+  token: string;
+  issueIdOrKey: string;
+}): Promise<any> {
+  const url = new URL(
+    `${params.baseUrl.replace(/\/$/, "")}/rest/api/3/issue/${encodeURIComponent(params.issueIdOrKey)}`,
+  );
+  url.searchParams.set("expand", "renderedFields,comment,worklog,changelog");
+  url.searchParams.set("fields", "summary,status,priority,assignee,updated,created");
+
+  const response = await fetch(url, {
+    headers: buildAuthHeaders(params.adminEmail, params.token),
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Failed to fetch issue details (${response.status}): ${message}`);
+  }
+
+  return response.json();
 }

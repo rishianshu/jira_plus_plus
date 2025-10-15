@@ -3,9 +3,9 @@ import jwt from "jsonwebtoken";
 import crypto from "node:crypto";
 import type { IncomingMessage } from "http";
 import { CredentialType, type Role, type User } from "@prisma/client";
-import { prisma } from "./prisma";
-import { getEnv } from "./env";
-import type { AuthenticatedUser } from "./context";
+import { prisma } from "./prisma.js";
+import { getEnv } from "./env.js";
+import type { AuthenticatedUser } from "./context.js";
 
 const TOKEN_EXPIRES_IN = "12h";
 const BCRYPT_ROUNDS = 12;

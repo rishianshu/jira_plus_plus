@@ -2,10 +2,24 @@ import { gql } from "graphql-tag";
 
 export const typeDefs = gql`
   scalar DateTime
+  scalar JSON
 
   enum Role {
     ADMIN
     USER
+  }
+
+  enum SyncJobStatus {
+    ACTIVE
+    PAUSED
+    ERROR
+  }
+
+  enum SyncStatus {
+    IDLE
+    RUNNING
+    SUCCESS
+    FAILED
   }
 
   type HealthCheck {
@@ -32,6 +46,16 @@ export const typeDefs = gql`
     projects: [JiraProject!]!
   }
 
+  type JiraUser {
+    id: ID!
+    accountId: String!
+    displayName: String!
+    email: String
+    avatarUrl: String
+    createdAt: DateTime!
+    updatedAt: DateTime!
+  }
+
   type JiraProject {
     id: ID!
     jiraId: String!
@@ -39,18 +63,11 @@ export const typeDefs = gql`
     name: String!
     isActive: Boolean!
     site: JiraSite!
-    createdAt: DateTime!
-    updatedAt: DateTime!
     trackedUsers: [ProjectTrackedUser!]!
-  }
-
-  type UserProjectLink {
-    id: ID!
-    jiraAccountId: String!
+    syncJob: SyncJob
+    syncStates: [SyncState!]!
     createdAt: DateTime!
     updatedAt: DateTime!
-    user: User!
-    project: JiraProject!
   }
 
   type ProjectTrackedUser {
@@ -64,24 +81,78 @@ export const typeDefs = gql`
     updatedAt: DateTime!
   }
 
-  type JiraProjectOption {
-    id: String!
+  type SyncJob {
+    id: ID!
+    workflowId: String!
+    scheduleId: String!
+    cronSchedule: String!
+    status: SyncJobStatus!
+    lastRunAt: DateTime
+    nextRunAt: DateTime
+    createdAt: DateTime!
+    updatedAt: DateTime!
+  }
+
+  type SyncState {
+    id: ID!
+    entity: String!
+    lastSyncTime: DateTime
+    status: SyncStatus!
+    metadata: JSON
+    createdAt: DateTime!
+    updatedAt: DateTime!
+  }
+
+  type SyncLog {
+    id: ID!
+    level: String!
+    message: String!
+    details: JSON
+    createdAt: DateTime!
+  }
+
+  type Issue {
+    id: ID!
+    jiraId: String!
     key: String!
+    summary: String
+    status: String!
+    priority: String
+    assignee: JiraUser
+    sprint: Sprint
+    jiraCreatedAt: DateTime!
+    jiraUpdatedAt: DateTime!
+    remoteData: JSON
+    comments: [Comment!]!
+    worklogs: [Worklog!]!
+  }
+
+  type Comment {
+    id: ID!
+    jiraId: String!
+    author: JiraUser!
+    body: String!
+    jiraCreatedAt: DateTime!
+    jiraUpdatedAt: DateTime
+  }
+
+  type Worklog {
+    id: ID!
+    jiraId: String!
+    author: JiraUser!
+    description: String
+    timeSpent: Int
+    jiraStartedAt: DateTime!
+    jiraUpdatedAt: DateTime!
+  }
+
+  type Sprint {
+    id: ID!
+    jiraId: String!
     name: String!
-    projectTypeKey: String
-    lead: String
-  }
-
-  type JiraUserOption {
-    accountId: String!
-    displayName: String!
-    email: String
-    avatarUrl: String
-  }
-
-  type AuthPayload {
-    token: String!
-    user: User!
+    state: String!
+    startDate: DateTime
+    endDate: DateTime
   }
 
   input LoginInput {
@@ -121,17 +192,22 @@ export const typeDefs = gql`
     jiraAccountId: String!
   }
 
-  input SetProjectTrackedUsersInput {
-    projectId: ID!
-    users: [ProjectTrackedUserInput!]!
-  }
-
   input ProjectTrackedUserInput {
     jiraAccountId: String!
     displayName: String!
     email: String
     avatarUrl: String
     isTracked: Boolean = true
+  }
+
+  input SetProjectTrackedUsersInput {
+    projectId: ID!
+    users: [ProjectTrackedUserInput!]!
+  }
+
+  type AuthPayload {
+    token: String!
+    user: User!
   }
 
   type Query {
@@ -144,6 +220,32 @@ export const typeDefs = gql`
     jiraProjectOptions(siteId: ID!): [JiraProjectOption!]!
     jiraProjectUserOptions(siteId: ID!, projectKey: String!): [JiraUserOption!]!
     projectTrackedUsers(projectId: ID!): [ProjectTrackedUser!]!
+    syncStates(projectId: ID!): [SyncState!]!
+    syncLogs(projectId: ID!, limit: Int = 50): [SyncLog!]!
+  }
+
+  type JiraProjectOption {
+    id: String!
+    key: String!
+    name: String!
+    projectTypeKey: String
+    lead: String
+  }
+
+  type JiraUserOption {
+    accountId: String!
+    displayName: String!
+    email: String
+    avatarUrl: String
+  }
+
+  type UserProjectLink {
+    id: ID!
+    jiraAccountId: String!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    user: User!
+    project: JiraProject!
   }
 
   type Mutation {
@@ -155,5 +257,10 @@ export const typeDefs = gql`
     mapUserToProject(input: MapUserInput!): UserProjectLink!
     unlinkUserFromProject(linkId: ID!): Boolean!
     setProjectTrackedUsers(input: SetProjectTrackedUsersInput!): [ProjectTrackedUser!]!
+    startProjectSync(projectId: ID!, full: Boolean = false): Boolean!
+    pauseProjectSync(projectId: ID!): Boolean!
+    resumeProjectSync(projectId: ID!): Boolean!
+    rescheduleProjectSync(projectId: ID!, cron: String!): Boolean!
+    triggerProjectSync(projectId: ID!, full: Boolean = false, accountIds: [String!]): Boolean!
   }
 `;

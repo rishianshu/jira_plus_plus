@@ -54,6 +54,17 @@ type Query {
 1. **Team Summary View:**  
    - Each user displayed as a card with “Yesterday / Today / Blockers.”  
    - Color-coded status: 🟢 on-track, 🟠 delayed, 🔴 blocked.
+   - Each user card is clickable and displays:
+     - Total worklog hours within selected date range (default past 1 working day)
+     - Count of To Do, In Progress, and Backlog issues
+   - Clicking a card expands into a detailed view showing:
+     - Work items grouped by status
+     - For each item, recent (past 1 day) worklogs and comments
+     - Option to expand an item for full detail
+   - Cards should support inline actions:
+     - Add comment
+     - Reassign issue
+     - Change issue status
 2. **AI Summary Panel:**  
    - “Regenerate Summary” button triggers fresh GPT generation.
 3. **Export Options:**  
@@ -97,6 +108,9 @@ type Query {
 - [ ] “Regenerate Summary” re-runs AI logic for a single user.
 - [ ] Export to PDF and Slack works reliably.
 - [ ] Page loads summaries under 2 seconds.
+- [ ] User cards display total worklog and issue counts.
+- [ ] Clicking a card shows detailed work items grouped by status with worklogs/comments.
+- [ ] Cards allow inline actions: add comment, reassign, change status.
 
 ---
 

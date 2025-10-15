@@ -6,6 +6,7 @@ Bootstrapped development workspace for the Jira++ platform described in `specs/`
 - Node.js 20+
 - pnpm 8+
 - Docker (for Postgres)
+- Temporal server 1.20+ (e.g. [temporalite](https://github.com/temporalio/temporalite) for local dev)
 
 ## Project Structure
 - `apps/api` – Apollo GraphQL server (Node.js + Prisma)
@@ -33,7 +34,13 @@ Bootstrapped development workspace for the Jira++ platform described in `specs/`
    pnpm --filter @jira-plus-plus/api prisma generate
    pnpm --filter @jira-plus-plus/api prisma migrate dev --name init
    ```
-5. **Run development servers**
+5. **Start the Temporal worker** (in a separate terminal)
+   ```bash
+   pnpm --filter @jira-plus-plus/api temporal:worker
+   ```
+   Ensure your Temporal server is running (`temporalite start --ephemeral` works great locally).
+
+6. **Run development servers**
    ```bash
    pnpm dev
    ```
@@ -54,4 +61,5 @@ Bootstrapped development workspace for the Jira++ platform described in `specs/`
 - Implement Jira REST client, syncing into Prisma models.
 - Build dashboard views using `@apollo/client` queries, React Router layouts, and shadcn-inspired components.
 - Flesh out Jira site polling & health checks, token rotation, and audit logging in the admin console.
+- Enhance ingest metrics (throughput/error rates) surfaced in the admin console.
 - Persist theme preferences per user profile and add accessibility audits for the admin console design system.

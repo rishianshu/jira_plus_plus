@@ -1,9 +1,9 @@
 import { startStandaloneServer } from "@apollo/server/standalone";
 import { ApolloServer } from "@apollo/server";
-import { schema } from "./schema";
-import { createContext } from "./context";
-import { getEnv } from "./env";
-import { seedAdminUser } from "./auth";
+import { schema } from "./schema.js";
+import { createContext } from "./context.js";
+import { getEnv } from "./env.js";
+import { seedAdminUser } from "./auth.js";
 
 async function bootstrap() {
   const env = getEnv();

@@ -1,17 +1,18 @@
 import { GraphQLError } from "graphql";
-import { DateTimeResolver } from "graphql-scalars";
-import { CredentialType } from "@prisma/client";
-import type { RequestContext } from "./context";
+import { DateTimeResolver, JSONResolver } from "graphql-scalars";
+import { CredentialType, type ProjectTrackedUser } from "@prisma/client";
+import type { RequestContext } from "./context.js";
+import { createAuthToken, encryptSecret, hashPassword, verifyPassword } from "./auth.js";
+import { fetchJiraProjectOptions, fetchJiraProjectUsers } from "./jira-client.js";
 import {
-  createAuthToken,
-  encryptSecret,
-  hashPassword,
-  verifyPassword,
-} from "./auth";
-import {
-  fetchJiraProjectOptions,
-  fetchJiraProjectUsers,
-} from "./jira-client";
+  initializeProjectSync,
+  pauseProjectSync,
+  resumeProjectSync,
+  rescheduleProjectSync,
+  triggerProjectSync,
+  startProjectSync,
+  updateNextRunFromSchedule,
+} from "./services/syncService.js";
 
 function requireUser(ctx: RequestContext) {
   if (!ctx.user) {
@@ -36,6 +37,7 @@ function requireAdmin(ctx: RequestContext) {
 
 export const resolvers = {
   DateTime: DateTimeResolver,
+  JSON: JSONResolver,
   Query: {
     health: () => ({
       status: "ok",
@@ -43,15 +45,11 @@ export const resolvers = {
     }),
     me: async (_parent: unknown, _args: unknown, ctx: RequestContext) => {
       const auth = requireUser(ctx);
-      return ctx.prisma.user.findUnique({
-        where: { id: auth.id },
-      });
+      return ctx.prisma.user.findUnique({ where: { id: auth.id } });
     },
     users: async (_parent: unknown, _args: unknown, ctx: RequestContext) => {
       requireAdmin(ctx);
-      return ctx.prisma.user.findMany({
-        orderBy: { createdAt: "desc" },
-      });
+      return ctx.prisma.user.findMany({ orderBy: { createdAt: "desc" } });
     },
     jiraSites: async (_parent: unknown, _args: unknown, ctx: RequestContext) => {
       requireAdmin(ctx);
@@ -68,7 +66,12 @@ export const resolvers = {
       requireAdmin(ctx);
       return ctx.prisma.jiraProject.findMany({
         where: { siteId: args.siteId },
-        include: { site: true, trackedUsers: true },
+        include: {
+          site: true,
+          trackedUsers: true,
+          syncJob: true,
+          syncStates: true,
+        },
         orderBy: { createdAt: "desc" },
       });
     },
@@ -111,6 +114,29 @@ export const resolvers = {
         orderBy: { displayName: "asc" },
       });
     },
+    syncStates: async (
+      _parent: unknown,
+      args: { projectId: string },
+      ctx: RequestContext,
+    ) => {
+      requireAdmin(ctx);
+      return ctx.prisma.syncState.findMany({
+        where: { projectId: args.projectId },
+        orderBy: { entity: "asc" },
+      });
+    },
+    syncLogs: async (
+      _parent: unknown,
+      args: { projectId: string; limit?: number },
+      ctx: RequestContext,
+    ) => {
+      requireAdmin(ctx);
+      return ctx.prisma.syncLog.findMany({
+        where: { projectId: args.projectId },
+        orderBy: { createdAt: "desc" },
+        take: args.limit ?? 50,
+      });
+    },
   },
   Mutation: {
     login: async (
@@ -137,7 +163,7 @@ export const resolvers = {
         });
       }
 
-      const payload = {
+      return {
         token: createAuthToken({
           id: user.id,
           email: user.email,
@@ -145,8 +171,6 @@ export const resolvers = {
         }),
         user,
       };
-
-      return payload;
     },
     createUser: async (
       _parent: unknown,
@@ -254,15 +278,26 @@ export const resolvers = {
         });
       }
 
-      return ctx.prisma.jiraProject.create({
+      const project = await ctx.prisma.jiraProject.create({
         data: {
           siteId: args.input.siteId,
           jiraId: args.input.jiraId,
           key: args.input.key,
           name: args.input.name,
         },
-        include: { site: true },
+        include: {
+          site: true,
+          trackedUsers: true,
+          syncJob: true,
+          syncStates: true,
+        },
       });
+
+      await initializeProjectSync(ctx.prisma, project.id);
+      await triggerProjectSync(ctx.prisma, project.id, { full: true });
+      await updateNextRunFromSchedule(ctx.prisma, project.id);
+
+      return project;
     },
     mapUserToProject: async (
       _parent: unknown,
@@ -273,10 +308,7 @@ export const resolvers = {
 
       const [user, project] = await Promise.all([
         ctx.prisma.user.findUnique({ where: { id: args.input.userId } }),
-        ctx.prisma.jiraProject.findUnique({
-          where: { id: args.input.projectId },
-          include: { site: true },
-        }),
+        ctx.prisma.jiraProject.findUnique({ where: { id: args.input.projectId }, include: { site: true } }),
       ]);
 
       if (!user || !project) {
@@ -306,6 +338,19 @@ export const resolvers = {
         },
       });
     },
+    unlinkUserFromProject: async (
+      _parent: unknown,
+      args: { linkId: string },
+      ctx: RequestContext,
+    ) => {
+      requireAdmin(ctx);
+      try {
+        await ctx.prisma.userProjectLink.delete({ where: { id: args.linkId } });
+        return true;
+      } catch {
+        return false;
+      }
+    },
     setProjectTrackedUsers: async (
       _parent: unknown,
       args: {
@@ -326,6 +371,7 @@ export const resolvers = {
 
       const project = await ctx.prisma.jiraProject.findUnique({
         where: { id: args.input.projectId },
+        include: { trackedUsers: true },
       });
 
       if (!project) {
@@ -334,29 +380,22 @@ export const resolvers = {
         });
       }
 
-      const incoming = args.input.users ?? [];
-      const accountIds = incoming.map((user) => user.jiraAccountId);
+      const incomingIds = new Set(args.input.users.map((user) => user.jiraAccountId));
 
-      if (accountIds.length > 0) {
+      if (project.trackedUsers.length) {
         await ctx.prisma.projectTrackedUser.deleteMany({
           where: {
-            projectId: args.input.projectId,
-            jiraAccountId: {
-              notIn: accountIds,
-            },
+            projectId: project.id,
+            jiraAccountId: { notIn: Array.from(incomingIds) },
           },
-        });
-      } else {
-        await ctx.prisma.projectTrackedUser.deleteMany({
-          where: { projectId: args.input.projectId },
         });
       }
 
-      for (const user of incoming) {
+      for (const user of args.input.users) {
         await ctx.prisma.projectTrackedUser.upsert({
           where: {
             projectId_jiraAccountId: {
-              projectId: args.input.projectId,
+              projectId: project.id,
               jiraAccountId: user.jiraAccountId,
             },
           },
@@ -367,7 +406,7 @@ export const resolvers = {
             isTracked: user.isTracked ?? true,
           },
           create: {
-            projectId: args.input.projectId,
+            projectId: project.id,
             jiraAccountId: user.jiraAccountId,
             displayName: user.displayName,
             email: user.email ?? null,
@@ -377,61 +416,116 @@ export const resolvers = {
         });
       }
 
-      return ctx.prisma.projectTrackedUser.findMany({
-        where: { projectId: args.input.projectId },
+      const tracked: ProjectTrackedUser[] = await ctx.prisma.projectTrackedUser.findMany({
+        where: { projectId: project.id },
         orderBy: { displayName: "asc" },
       });
+
+      await triggerProjectSync(ctx.prisma, project.id, {
+        full: true,
+        accountIds: tracked.filter((user) => user.isTracked).map((user) => user.jiraAccountId),
+      });
+
+      return tracked;
     },
-    unlinkUserFromProject: async (
+    startProjectSync: async (
       _parent: unknown,
-      args: { linkId: string },
+      args: { projectId: string; full?: boolean },
       ctx: RequestContext,
     ) => {
       requireAdmin(ctx);
-      try {
-        await ctx.prisma.userProjectLink.delete({
-          where: { id: args.linkId },
-        });
-        return true;
-      } catch {
-        return false;
-      }
+      await startProjectSync(ctx.prisma, args.projectId, args.full ?? false);
+      await updateNextRunFromSchedule(ctx.prisma, args.projectId);
+      return true;
     },
-  },
-  JiraSite: {
-    projects: async (
-      parent: { id: string },
-      _args: unknown,
+    pauseProjectSync: async (_parent: unknown, args: { projectId: string }, ctx: RequestContext) => {
+      requireAdmin(ctx);
+      await pauseProjectSync(ctx.prisma, args.projectId);
+      return true;
+    },
+    resumeProjectSync: async (_parent: unknown, args: { projectId: string }, ctx: RequestContext) => {
+      requireAdmin(ctx);
+      await resumeProjectSync(ctx.prisma, args.projectId);
+      await updateNextRunFromSchedule(ctx.prisma, args.projectId);
+      return true;
+    },
+    rescheduleProjectSync: async (
+      _parent: unknown,
+      args: { projectId: string; cron: string },
       ctx: RequestContext,
     ) => {
-      return ctx.prisma.jiraProject.findMany({
-        where: { siteId: parent.id },
-        include: { site: true },
-        orderBy: { createdAt: "desc" },
+      requireAdmin(ctx);
+      await rescheduleProjectSync(ctx.prisma, args.projectId, args.cron);
+      await updateNextRunFromSchedule(ctx.prisma, args.projectId);
+      return true;
+    },
+    triggerProjectSync: async (
+      _parent: unknown,
+      args: { projectId: string; full?: boolean; accountIds?: string[] | null },
+      ctx: RequestContext,
+    ) => {
+      requireAdmin(ctx);
+      await triggerProjectSync(ctx.prisma, args.projectId, {
+        full: args.full ?? false,
+        accountIds: args.accountIds ?? undefined,
       });
+      return true;
     },
   },
   JiraProject: {
-    site: async (parent: { siteId: string }, _args: unknown, ctx: RequestContext) => {
-      return ctx.prisma.jiraSite.findUnique({
-        where: { id: parent.siteId },
-      });
+    site: (parent: any, _args: unknown, ctx: RequestContext) => {
+      if (parent.site) return parent.site;
+      return ctx.prisma.jiraProject.findUnique({ where: { id: parent.id } }).site();
     },
-    trackedUsers: async (parent: { id: string }, _args: unknown, ctx: RequestContext) => {
+    trackedUsers: (parent: any, _args: unknown, ctx: RequestContext) => {
+      if (parent.trackedUsers) return parent.trackedUsers;
       return ctx.prisma.projectTrackedUser.findMany({
         where: { projectId: parent.id },
         orderBy: { displayName: "asc" },
       });
     },
-  },
-  UserProjectLink: {
-    user: async (parent: { userId: string }, _args: unknown, ctx: RequestContext) => {
-      return ctx.prisma.user.findUnique({ where: { id: parent.userId } });
+    syncJob: (parent: any, _args: unknown, ctx: RequestContext) => {
+      if (parent.syncJob) return parent.syncJob;
+      return ctx.prisma.syncJob.findUnique({ where: { projectId: parent.id } });
     },
-    project: async (parent: { projectId: string }, _args: unknown, ctx: RequestContext) => {
-      return ctx.prisma.jiraProject.findUnique({
-        where: { id: parent.projectId },
-        include: { site: true },
+    syncStates: (parent: any, _args: unknown, ctx: RequestContext) => {
+      if (parent.syncStates) return parent.syncStates;
+      return ctx.prisma.syncState.findMany({
+        where: { projectId: parent.id },
+        orderBy: { entity: "asc" },
+      });
+    },
+  },
+  Comment: {
+    author: (parent: any, _args: unknown, ctx: RequestContext) => {
+      if (parent.author) return parent.author;
+      return ctx.prisma.comment.findUnique({ where: { id: parent.id } }).author();
+    },
+  },
+  Worklog: {
+    author: (parent: any, _args: unknown, ctx: RequestContext) => {
+      if (parent.author) return parent.author;
+      return ctx.prisma.worklog.findUnique({ where: { id: parent.id } }).author();
+    },
+  },
+  Issue: {
+    assignee: (parent: any, _args: unknown, ctx: RequestContext) => {
+      if (parent.assignee) return parent.assignee;
+      if (!parent.assigneeId) return null;
+      return ctx.prisma.jiraUser.findUnique({ where: { id: parent.assigneeId } });
+    },
+    comments: (parent: any, _args: unknown, ctx: RequestContext) => {
+      if (parent.comments) return parent.comments;
+      return ctx.prisma.comment.findMany({
+        where: { issueId: parent.id },
+        orderBy: { jiraCreatedAt: "asc" },
+      });
+    },
+    worklogs: (parent: any, _args: unknown, ctx: RequestContext) => {
+      if (parent.worklogs) return parent.worklogs;
+      return ctx.prisma.worklog.findMany({
+        where: { issueId: parent.id },
+        orderBy: { jiraStartedAt: "asc" },
       });
     },
   },

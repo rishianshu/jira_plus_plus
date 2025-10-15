@@ -31,6 +31,10 @@ const envSchema = z.object({
   ADMIN_EMAIL: z.string().email(),
   ADMIN_PASSWORD: z.string().min(8, "ADMIN_PASSWORD must be at least 8 characters"),
   ADMIN_DISPLAY_NAME: z.string().min(1, "ADMIN_DISPLAY_NAME is required"),
+  TEMPORAL_ADDRESS: z.string().default("localhost:7233"),
+  TEMPORAL_NAMESPACE: z.string().default("default"),
+  TEMPORAL_TASK_QUEUE: z.string().default("jira-sync"),
+  SYNC_DEFAULT_CRON: z.string().default("*/15 * * * *"),
 });
 
 type EnvShape = z.infer<typeof envSchema>;

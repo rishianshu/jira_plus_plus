@@ -4,7 +4,9 @@
     "jsx": "react-jsx",
     "strict": true,
     "noEmit": true,
-    "types": ["node", "vitest/globals"]
+    "types": ["node", "vitest/globals"],
+    "module": "ESNext",
+    "moduleResolution": "Node"
   },
   "include": ["vite.config.ts", "src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["node_modules", "dist"]

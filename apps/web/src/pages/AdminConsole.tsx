@@ -49,6 +49,19 @@ const ADMIN_CONSOLE_QUERY = gql`
           avatarUrl
           isTracked
         }
+        syncJob {
+          id
+          status
+          cronSchedule
+          lastRunAt
+          nextRunAt
+        }
+        syncStates {
+          id
+          entity
+          status
+          lastSyncTime
+        }
       }
     }
   }
@@ -114,6 +127,48 @@ const MAP_USER_MUTATION = gql`
 const UNLINK_MUTATION = gql`
   mutation UnlinkUserFromProject($linkId: ID!) {
     unlinkUserFromProject(linkId: $linkId)
+  }
+`;
+
+const START_SYNC_MUTATION = gql`
+  mutation StartProjectSync($projectId: ID!, $full: Boolean) {
+    startProjectSync(projectId: $projectId, full: $full)
+  }
+`;
+
+const PAUSE_SYNC_MUTATION = gql`
+  mutation PauseProjectSync($projectId: ID!) {
+    pauseProjectSync(projectId: $projectId)
+  }
+`;
+
+const RESUME_SYNC_MUTATION = gql`
+  mutation ResumeProjectSync($projectId: ID!) {
+    resumeProjectSync(projectId: $projectId)
+  }
+`;
+
+const RESCHEDULE_SYNC_MUTATION = gql`
+  mutation RescheduleProjectSync($projectId: ID!, $cron: String!) {
+    rescheduleProjectSync(projectId: $projectId, cron: $cron)
+  }
+`;
+
+const TRIGGER_SYNC_MUTATION = gql`
+  mutation TriggerProjectSync($projectId: ID!, $full: Boolean, $accountIds: [String!]) {
+    triggerProjectSync(projectId: $projectId, full: $full, accountIds: $accountIds)
+  }
+`;
+
+const SYNC_LOGS_QUERY = gql`
+  query SyncLogs($projectId: ID!, $limit: Int) {
+    syncLogs(projectId: $projectId, limit: $limit) {
+      id
+      level
+      message
+      details
+      createdAt
+    }
   }
 `;
 
@@ -210,6 +265,19 @@ type AdminConsoleData = {
         avatarUrl: string | null;
         isTracked: boolean;
       }>;
+      syncJob: {
+        id: string;
+        status: string;
+        cronSchedule: string;
+        lastRunAt: string | null;
+        nextRunAt: string | null;
+      } | null;
+      syncStates: Array<{
+        id: string;
+        entity: string;
+        status: string;
+        lastSyncTime: string | null;
+      }>;
     }>;
   }>;
 };
@@ -256,6 +324,16 @@ type TrackedUsersData = {
   }>;
 };
 
+type SyncLogsData = {
+  syncLogs: Array<{
+    id: string;
+    level: string;
+    message: string;
+    details: unknown;
+    createdAt: string;
+  }>;
+};
+
 type ModalType = "site" | "user" | "project" | "mapping" | null;
 
 const sidebarSections = [
@@ -290,6 +368,31 @@ export function AdminConsolePage() {
       }
     | null
   >(null);
+  const [projectSyncModal, setProjectSyncModal] = useState<
+    | {
+        projectId: string;
+        projectKey: string;
+        projectName: string;
+        siteAlias: string;
+        job: (
+          | {
+              id: string;
+              status: string;
+              cronSchedule: string;
+              lastRunAt: string | null;
+              nextRunAt: string | null;
+            }
+          | null
+        );
+        syncStates: Array<{
+          id: string;
+          entity: string;
+          status: string;
+          lastSyncTime: string | null;
+        }>;
+      }
+    | null
+  >(null);
 
   const [fetchLinks, { data: linkData, loading: linksLoading, refetch: refetchLinks }] =
     useLazyQuery<UserProjectLinksData>(USER_LINKS_QUERY);
@@ -304,16 +407,17 @@ export function AdminConsolePage() {
   const users = data?.users ?? ([] as AdminConsoleData["users"]);
   const projects = useMemo(
     () =>
-      sites.flatMap((site) =>
+      (data?.jiraSites ?? []).flatMap((site) =>
         site.projects.map((project) => ({
           ...project,
-          site,
           siteId: site.id,
           siteAlias: site.alias,
           trackedUsers: project.trackedUsers ?? [],
+          syncJob: project.syncJob ?? null,
+          syncStates: project.syncStates ?? [],
         })),
       ),
-    [sites],
+    [data?.jiraSites],
   );
 
   const selectedUser = selectedUserId
@@ -502,22 +606,41 @@ export function AdminConsolePage() {
                         {formatDate(project.createdAt)}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            setProjectUsersModal({
-                              projectId: project.id,
-                              projectKey: project.key,
-                              projectName: project.name,
-                              siteId: project.siteId,
-                              siteAlias: project.siteAlias,
-                            })
-                          }
-                        >
-                          Manage Jira users
-                        </Button>
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              setProjectSyncModal({
+                                projectId: project.id,
+                                projectKey: project.key,
+                                projectName: project.name,
+                                siteAlias: project.siteAlias,
+                                job: project.syncJob ?? null,
+                                syncStates: project.syncStates ?? [],
+                              })
+                            }
+                          >
+                            Manage sync
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              setProjectUsersModal({
+                                projectId: project.id,
+                                projectKey: project.key,
+                                projectName: project.name,
+                                siteId: project.siteId,
+                                siteAlias: project.siteAlias,
+                              })
+                            }
+                          >
+                            Manage Jira users
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -723,6 +846,13 @@ export function AdminConsolePage() {
         onClose={() => setProjectUsersModal(null)}
         onCompleted={async () => {
           setProjectUsersModal(null);
+          await refetch();
+        }}
+      />
+      <ProjectSyncModal
+        project={projectSyncModal}
+        onClose={() => setProjectSyncModal(null)}
+        onSuccess={async () => {
           await refetch();
         }}
       />
@@ -1329,8 +1459,14 @@ function ProjectUsersModal({
     );
   }, [open, trackedData]);
 
-  const suggestions = optionsData?.jiraProjectUserOptions ?? ([] as ProjectUserOptionsData["jiraProjectUserOptions"]);
-  const trackedUsers = trackedData?.projectTrackedUsers ?? ([] as TrackedUsersData["projectTrackedUsers"]);
+  const suggestions = useMemo(
+    () => optionsData?.jiraProjectUserOptions ?? ([] as ProjectUserOptionsData["jiraProjectUserOptions"]),
+    [optionsData?.jiraProjectUserOptions],
+  );
+  const trackedUsers = useMemo(
+    () => trackedData?.projectTrackedUsers ?? ([] as TrackedUsersData["projectTrackedUsers"]),
+    [trackedData?.projectTrackedUsers],
+  );
 
   const combined = useMemo(() => {
     const map = new Map<string, ProjectUserDetail>();
@@ -1490,6 +1626,228 @@ function ProjectUsersModal({
         ) : null}
         {message ? <InlineMessage tone="error">{message}</InlineMessage> : null}
       </form>
+    </Modal>
+  );
+}
+
+function ProjectSyncModal({
+  project,
+  onClose,
+  onSuccess,
+}: {
+  project:
+    | {
+        projectId: string;
+        projectKey: string;
+        projectName: string;
+        siteAlias: string;
+        job:
+          | {
+              id: string;
+              status: string;
+              cronSchedule: string;
+              lastRunAt: string | null;
+              nextRunAt: string | null;
+            }
+          | null;
+        syncStates: Array<{
+          id: string;
+          entity: string;
+          status: string;
+          lastSyncTime: string | null;
+        }>;
+      }
+    | null;
+  onClose: () => void;
+  onSuccess: () => Promise<void>;
+}) {
+  const [cronValue, setCronValue] = useState("*/15 * * * *");
+  const [fetchLogs, { data: logsData, loading: logsLoading, refetch: refetchLogs }] =
+    useLazyQuery<SyncLogsData>(SYNC_LOGS_QUERY);
+  const [startSync, { loading: startLoading }] = useMutation(START_SYNC_MUTATION);
+  const [pauseSync, { loading: pauseLoading }] = useMutation(PAUSE_SYNC_MUTATION);
+  const [resumeSync, { loading: resumeLoading }] = useMutation(RESUME_SYNC_MUTATION);
+  const [rescheduleSync, { loading: rescheduleLoading }] = useMutation(RESCHEDULE_SYNC_MUTATION);
+  const [triggerSync, { loading: triggerLoading }] = useMutation(TRIGGER_SYNC_MUTATION);
+
+  useEffect(() => {
+    if (project) {
+      setCronValue(project.job?.cronSchedule ?? "*/15 * * * *");
+      void fetchLogs({ variables: { projectId: project.projectId, limit: 20 } });
+    }
+  }, [project, fetchLogs]);
+
+  if (!project) {
+    return null;
+  }
+
+  const logs = logsData?.syncLogs ?? [];
+  const isPaused = project.job?.status === "PAUSED";
+
+  const formatOptionalDate = (value: string | null | undefined) =>
+    value ? formatDate(value) : "—";
+
+  const handleAction = async (action: () => Promise<unknown>) => {
+    await action();
+    await onSuccess();
+    onClose();
+  };
+
+  return (
+    <Modal
+      open={Boolean(project)}
+      onClose={onClose}
+      title="Manage sync"
+      description={`Temporal schedule for ${project.projectName} (${project.projectKey})`}
+    >
+      <div className="space-y-4 text-sm text-slate-600 dark:text-slate-300">
+        <div className="rounded-lg border border-slate-200 bg-slate-50/70 px-4 py-3 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-400">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span>Status: {project.job?.status ?? "PENDING"}</span>
+            <span>Last run: {formatOptionalDate(project.job?.lastRunAt)}</span>
+            <span>Next run: {formatOptionalDate(project.job?.nextRunAt)}</span>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={startLoading}
+            onClick={() => handleAction(() => startSync({ variables: { projectId: project.projectId } }))}
+          >
+            {startLoading ? "Starting…" : "Start schedule & run"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={triggerLoading}
+            onClick={() => handleAction(() => triggerSync({ variables: { projectId: project.projectId } }))}
+          >
+            {triggerLoading ? "Triggering…" : "Trigger incremental"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={triggerLoading}
+            onClick={() => handleAction(() => triggerSync({ variables: { projectId: project.projectId, full: true } }))}
+          >
+            {triggerLoading ? "Triggering…" : "Trigger full resync"}
+          </Button>
+          {isPaused ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={resumeLoading}
+              onClick={() => handleAction(() => resumeSync({ variables: { projectId: project.projectId } }))}
+            >
+              {resumeLoading ? "Resuming…" : "Resume schedule"}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={pauseLoading}
+              onClick={() => handleAction(() => pauseSync({ variables: { projectId: project.projectId } }))}
+            >
+              {pauseLoading ? "Pausing…" : "Pause schedule"}
+            </Button>
+          )}
+        </div>
+
+        <form
+          className="space-y-2"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            await handleAction(() =>
+              rescheduleSync({ variables: { projectId: project.projectId, cron: cronValue } }),
+            );
+          }}
+        >
+          <Input
+            label="Cron schedule"
+            value={cronValue}
+            onChange={setCronValue}
+            placeholder="*/15 * * * *"
+            required
+          />
+          <div className="flex justify-end">
+            <Button type="submit" size="sm" variant="outline" disabled={rescheduleLoading}>
+              {rescheduleLoading ? "Updating…" : "Update"}
+            </Button>
+          </div>
+        </form>
+
+        <div className="space-y-2">
+          <h4 className="text-sm font-semibold text-slate-800 dark:text-slate-200">Entities</h4>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-200 text-xs dark:divide-slate-800">
+              <thead className="bg-slate-100 text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
+                <tr>
+                  <th className="px-3 py-2 text-left font-semibold">Entity</th>
+                  <th className="px-3 py-2 text-left font-semibold">Status</th>
+                  <th className="px-3 py-2 text-left font-semibold">Last sync</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                {project.syncStates.map((state) => (
+                  <tr key={state.id}>
+                    <td className="px-3 py-2 capitalize text-slate-600 dark:text-slate-300">
+                      {state.entity}
+                    </td>
+                    <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{state.status}</td>
+                    <td className="px-3 py-2 text-slate-500 dark:text-slate-400">
+                      {formatOptionalDate(state.lastSyncTime)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <h4 className="text-sm font-semibold text-slate-800 dark:text-slate-200">Recent logs</h4>
+            <Button type="button" variant="outline" size="sm" onClick={() => void refetchLogs?.()}>
+              Refresh
+            </Button>
+          </div>
+          <div className="max-h-48 overflow-y-auto rounded-2xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+            {logsLoading ? (
+              <p className="p-4 text-xs text-slate-500 dark:text-slate-400">Loading logs…</p>
+            ) : logs.length === 0 ? (
+              <p className="p-4 text-xs text-slate-500 dark:text-slate-400">No log entries yet.</p>
+            ) : (
+              <ul className="divide-y divide-slate-200 text-xs dark:divide-slate-800">
+                {logs.map((log) => (
+                  <li key={log.id} className="px-4 py-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                        {log.level}
+                      </span>
+                      <span className="text-[11px] text-slate-400 dark:text-slate-500">
+                        {formatOptionalDate(log.createdAt)}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-slate-600 dark:text-slate-300">{log.message}</p>
+                    {log.details ? (
+                      <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-100 p-2 text-[11px] text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
+                        {JSON.stringify(log.details, null, 2)}
+                      </pre>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      </div>
     </Modal>
   );
 }

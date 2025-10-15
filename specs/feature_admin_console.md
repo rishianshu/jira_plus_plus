@@ -28,6 +28,7 @@ Deliver a secure control centre for Jira++ where the admin can manage authentica
      - **Projects:** curated list of Jira projects per site with metadata badges.
      - **User Directory:** list platform users, role badges, authentication status (local / Jira SSO placeholder).
      - **Account Mapping:** map Jira account IDs to platform users for downstream analytics.
+     - **Project Sync Controls:** inspect Temporal job status, pause/resume/reschedule cron, trigger incremental or full resyncs, and browse recent sync logs.
      - **Project Roster:** fetch assignable Jira users per project, track the subset Jira++ should analyze, and surface those tracked identities in downstream flows.
    - Forms provide optimistic UI feedback with loading and success states.
    - Minimal audit context (timestamps, last updated by) surfaced in UI.
@@ -119,3 +120,4 @@ Deliver a secure control centre for Jira++ where the admin can manage authentica
 - [ ] Admin can create platform users and map them to Jira account IDs.
 - [ ] Landing page + login panel meet responsive design requirements (desktop + tablet + mobile).
 - [ ] Documentation updated with provisioning guide and security considerations.
+- [ ] Admins can view sync job state/logs and manage cron/trigger controls per project.
