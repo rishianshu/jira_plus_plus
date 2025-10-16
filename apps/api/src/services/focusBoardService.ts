@@ -133,6 +133,9 @@ function buildWorklogTimeline(worklogs: Worklog[]): WorklogBucket[] {
   const bucket = new Map<string, number>();
   for (const worklog of worklogs) {
     const date = DateTime.fromJSDate(worklog.jiraStartedAt).toISODate();
+    if (!date) {
+      continue;
+    }
     const hours = (worklog.timeSpent ?? 0) / 3600;
     bucket.set(date, (bucket.get(date) ?? 0) + hours);
   }
@@ -171,11 +174,16 @@ export async function buildFocusBoard(
   );
 
   if (!projectIds.length || !accountIds.length) {
+    const emptyRange = {
+      start: start.toISODate() ?? start.toISO() ?? start.toFormat("yyyy-LL-dd"),
+      end: end.toISODate() ?? end.toISO() ?? end.toFormat("yyyy-LL-dd"),
+    };
     return {
       projects: accessibleProjects,
       issues: [],
       blockers: [],
       comments: [],
+      issueEvents: [],
       worklogTimeline: [],
       metrics: {
         totalIssues: 0,
@@ -184,7 +192,7 @@ export async function buildFocusBoard(
         hoursLogged: 0,
         averageHoursPerDay: 0,
       },
-      dateRange: { start: start.toISODate(), end: end.toISODate() },
+      dateRange: emptyRange,
       updatedAt: new Date(),
       warnings: [],
     };
@@ -472,6 +480,9 @@ export async function buildFocusBoard(
     averageHoursPerDay: averageHours,
   };
 
+  const isoStart = start.toISODate() ?? start.toISO() ?? start.toFormat("yyyy-LL-dd");
+  const isoEnd = end.toISODate() ?? end.toISO() ?? end.toFormat("yyyy-LL-dd");
+
   return {
     projects: accessibleProjects,
     issues,
@@ -480,7 +491,7 @@ export async function buildFocusBoard(
     issueEvents,
     worklogTimeline: buildWorklogTimeline(panelWorklogResults),
     metrics,
-    dateRange: { start: start.toISODate(), end: end.toISODate() },
+    dateRange: { start: isoStart, end: isoEnd },
     updatedAt: new Date(),
     warnings,
   };

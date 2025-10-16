@@ -18,6 +18,7 @@ model User {
   summaries    DailySummary[]
   sitesCreated JiraSite[]        @relation("SiteCreator")
   projectLinks UserProjectLink[]
+  performanceNotes PerformanceReviewNote[] @relation("PerformanceNoteManager")
 }
 
 model Credential {
@@ -73,6 +74,7 @@ model JiraProject {
   syncLogs     SyncLog[]
   syncStates   SyncState[]
   accountLinks UserProjectLink[]
+  performanceNotes PerformanceReviewNote[]
 
   @@unique([siteId, jiraId])
   @@unique([siteId, key])
@@ -89,6 +91,7 @@ model ProjectTrackedUser {
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
   project       JiraProject @relation(fields: [projectId], references: [id])
+  performanceNotes PerformanceReviewNote[]
 
   @@unique([projectId, jiraAccountId])
 }
@@ -183,6 +186,23 @@ model DailySummary {
   user      User        @relation(fields: [userId], references: [id])
 
   @@unique([userId, projectId, date])
+}
+
+model PerformanceReviewNote {
+  id             String             @id @default(uuid())
+  projectId      String
+  trackedUserId  String
+  managerId      String
+  startDate      DateTime
+  endDate        DateTime
+  markdown       String
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  project        JiraProject        @relation(fields: [projectId], references: [id])
+  trackedUser    ProjectTrackedUser @relation(fields: [trackedUserId], references: [id])
+  manager        User               @relation("PerformanceNoteManager", fields: [managerId], references: [id])
+
+  @@unique([projectId, trackedUserId, managerId, startDate, endDate])
 }
 
 model SyncJob {

@@ -248,6 +248,53 @@ export const typeDefs = gql`
     warnings: [FocusBoardWarning!]!
   }
 
+  type ManagerSummaryTotals {
+    committedIssues: Int!
+    completedIssues: Int!
+    completionPercent: Float
+    velocity: Float!
+    activeBlockers: Int!
+    riskLevel: String!
+    riskReason: String
+    timeProgressPercent: Float
+  }
+
+  type ManagerSummaryKpi {
+    id: String!
+    label: String!
+    value: Float
+    formattedValue: String
+    subtitle: String
+    delta: Float
+    trendLabel: String
+  }
+
+  type ManagerSummaryBlocker {
+    issue: Issue!
+    assignee: JiraUser
+    status: String
+    priority: String
+    daysOpen: Int!
+  }
+
+  type ManagerSummaryNarrative {
+    headline: String!
+    body: String!
+    highlights: [String!]!
+  }
+
+  type ManagerSummary {
+    project: JiraProject!
+    sprint: Sprint
+    range: FocusDateRange!
+    totals: ManagerSummaryTotals!
+    kpis: [ManagerSummaryKpi!]!
+    blockers: [ManagerSummaryBlocker!]!
+    aiSummary: ManagerSummaryNarrative
+    warnings: [FocusBoardWarning!]!
+    updatedAt: DateTime!
+  }
+
   type Sprint {
     id: ID!
     jiraId: String!
@@ -327,6 +374,8 @@ export const typeDefs = gql`
     focusBoard(projectIds: [ID!], start: Date, end: Date): FocusBoard!
     syncStates(projectId: ID!): [SyncState!]!
     syncLogs(projectId: ID!, limit: Int = 50): [SyncLog!]!
+    projectSprints(projectId: ID!): [Sprint!]!
+    managerSummary(projectId: ID!, sprintId: ID): ManagerSummary!
   }
 
   type JiraProjectOption {

@@ -1,0 +1,62 @@
+const DEFAULT_GRAPHQL_ENDPOINT = "http://localhost:4000/graphql";
+
+function deriveBaseUrlFromGraphql(endpoint: string): string {
+  try {
+    const url = new URL(endpoint);
+    if (url.pathname.endsWith("/graphql")) {
+      url.pathname = url.pathname.replace(/\/graphql$/, "");
+    }
+    url.search = "";
+    url.hash = "";
+    const normalized = url.toString();
+    return normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+  } catch {
+    return "http://localhost:4000";
+  }
+}
+
+export function getApiBaseUrl(): string {
+  const configured = import.meta.env.VITE_API_BASE_URL;
+  if (configured && typeof configured === "string") {
+    return configured.endsWith("/") ? configured.slice(0, -1) : configured;
+  }
+  const graphqlEndpoint =
+    (typeof import.meta.env.VITE_GRAPHQL_ENDPOINT === "string" && import.meta.env.VITE_GRAPHQL_ENDPOINT.trim()) ||
+    DEFAULT_GRAPHQL_ENDPOINT;
+  return deriveBaseUrlFromGraphql(graphqlEndpoint);
+}
+
+export async function apiFetch<T>(
+  path: string,
+  init: RequestInit & { token?: string } = {},
+): Promise<T> {
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+  const headers = new Headers(init.headers ?? {});
+  if (init.token) {
+    headers.set("Authorization", `Bearer ${init.token}`);
+  }
+  if (!headers.has("Content-Type") && init.body) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  const response = await fetch(url, {
+    ...init,
+    headers,
+  });
+
+  const text = await response.text();
+  const payload = text ? (JSON.parse(text) as unknown) : null;
+
+  if (!response.ok) {
+    const errorMessage =
+      (payload && typeof payload === "object" && payload && "error" in (payload as Record<string, unknown>))
+        ? String((payload as Record<string, unknown>).error)
+        : response.statusText;
+    const error = new Error(errorMessage || "Request failed");
+    (error as Error & { status?: number }).status = response.status;
+    throw error;
+  }
+
+  return payload as T;
+}

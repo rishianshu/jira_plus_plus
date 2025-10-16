@@ -18,6 +18,6 @@
 5. **Test Coverage:** Add regression tests around the service layer to assert that simulated Prisma errors bubble up as `GraphQLError` with the expected message/code (TODO).
 
 ## Follow-ups
-- Adopt the shared guidance in [error_handling_guidelines.md](./error_handling_guidelines.md) for UI presentation and future API work.
+- Adopt the shared guidance in [error_handling_guidelines.md](../../shared/error_handling.md) for UI presentation and future API work.
 - Add client-side handling to display error banners or inline warnings when the GraphQL response contains errors.
 - Introduce metrics/alerts (e.g., via application monitoring) for `[FocusBoard]` error logs to track frequency.

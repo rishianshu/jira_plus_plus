@@ -22,6 +22,7 @@ import {
   generateSummaryForUser,
 } from "./services/dailySummaryService.js";
 import { buildFocusBoard } from "./services/focusBoardService.js";
+import { buildManagerSummary } from "./services/managerSummaryService.js";
 
 function requireUser(ctx: RequestContext) {
   if (!ctx.user) {
@@ -199,6 +200,59 @@ export const resolvers = {
         orderBy: { createdAt: "desc" },
         take: args.limit ?? 50,
       });
+    },
+    projectSprints: async (
+      _parent: unknown,
+      args: { projectId: string },
+      ctx: RequestContext,
+    ) => {
+      const auth = requireUser(ctx);
+      if (auth.role !== "ADMIN") {
+        const membership = await ctx.prisma.userProjectLink.count({
+          where: { projectId: args.projectId, userId: auth.id },
+        });
+        if (!membership) {
+          throw new GraphQLError("You do not have access to this project", {
+            extensions: { code: "FORBIDDEN" },
+          });
+        }
+      }
+
+      return ctx.prisma.sprint.findMany({
+        where: { issues: { some: { projectId: args.projectId } } },
+        orderBy: [
+          { startDate: "desc" },
+          { endDate: "desc" },
+          { createdAt: "desc" },
+        ],
+      });
+    },
+    managerSummary: async (
+      _parent: unknown,
+      args: { projectId: string; sprintId?: string | null },
+      ctx: RequestContext,
+    ) => {
+      const auth = requireUser(ctx);
+      try {
+        return await buildManagerSummary(ctx.prisma, auth, {
+          projectId: args.projectId,
+          sprintId: args.sprintId ?? null,
+        });
+      } catch (error) {
+        if (error instanceof Error) {
+          const statusCode = (error as Error & { statusCode?: number }).statusCode ?? 500;
+          const code =
+            statusCode === 403
+              ? "FORBIDDEN"
+              : statusCode === 404
+                ? "NOT_FOUND"
+                : "INTERNAL_SERVER_ERROR";
+          throw new GraphQLError(error.message, {
+            extensions: { code },
+          });
+        }
+        throw error;
+      }
     },
   },
   Mutation: {

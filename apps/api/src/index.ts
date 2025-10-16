@@ -13,6 +13,13 @@ import {
   generateSummariesForDate,
   generateSummaryForUser,
 } from "./services/dailySummaryService.js";
+import {
+  PerformanceReviewError,
+  buildPerformanceMetrics,
+  comparePerformanceMetrics,
+  generatePerformanceSummary,
+  savePerformanceNote,
+} from "./services/performanceReviewService.js";
 
 function todayIsoDate() {
   return new Date().toISOString().slice(0, 10);
@@ -79,6 +86,26 @@ async function bootstrap() {
 
       if (url.pathname === "/api/scrum/export" && (req.method ?? "").toUpperCase() === "POST") {
         await handleExportRequest(req, res);
+        return;
+      }
+
+      if (url.pathname === "/api/performance/metrics" && (req.method ?? "").toUpperCase() === "GET") {
+        await handlePerformanceMetricsRequest(req, res, url);
+        return;
+      }
+
+      if (url.pathname === "/api/performance/summary" && (req.method ?? "").toUpperCase() === "POST") {
+        await handlePerformanceSummaryRequest(req, res);
+        return;
+      }
+
+      if (url.pathname === "/api/performance/compare" && (req.method ?? "").toUpperCase() === "GET") {
+        await handlePerformanceComparisonRequest(req, res, url);
+        return;
+      }
+
+      if (url.pathname === "/api/performance/notes" && (req.method ?? "").toUpperCase() === "PUT") {
+        await handlePerformanceNotesRequest(req, res);
         return;
       }
 
@@ -292,6 +319,194 @@ async function handleExportRequest(req: IncomingMessage, res: ServerResponse) {
   }
 
   sendJson(res, 400, { error: "Unsupported export target" });
+}
+
+async function handlePerformanceMetricsRequest(req: IncomingMessage, res: ServerResponse, url: URL) {
+  const ctx = await createContext({ req });
+  if (!ctx.user) {
+    sendJson(res, 401, { error: "Authentication required" });
+    return;
+  }
+
+  const projectId = url.searchParams.get("projectId")?.trim() ?? "";
+  const trackedUserId = url.searchParams.get("trackedUserId")?.trim() ?? "";
+  const start = url.searchParams.get("start")?.trim() || undefined;
+  const end = url.searchParams.get("end")?.trim() || undefined;
+
+  if (!projectId) {
+    sendJson(res, 400, { error: "projectId is required" });
+    return;
+  }
+  if (!trackedUserId) {
+    sendJson(res, 400, { error: "trackedUserId is required" });
+    return;
+  }
+
+  try {
+    const metrics = await buildPerformanceMetrics(ctx.prisma, ctx.user, {
+      projectId,
+      trackedUserId,
+      start,
+      end,
+    });
+    sendJson(res, 200, { metrics });
+  } catch (error) {
+    if (error instanceof PerformanceReviewError) {
+      sendJson(res, error.statusCode, { error: error.message });
+      return;
+    }
+    throw error;
+  }
+}
+
+async function handlePerformanceSummaryRequest(req: IncomingMessage, res: ServerResponse) {
+  const ctx = await createContext({ req });
+  if (!ctx.user) {
+    sendJson(res, 401, { error: "Authentication required" });
+    return;
+  }
+
+  const rawBody = await readBody(req);
+  if (!rawBody.length) {
+    sendJson(res, 400, { error: "Request body is required" });
+    return;
+  }
+
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(rawBody.toString()) as Record<string, unknown>;
+  } catch {
+    sendJson(res, 400, { error: "Invalid JSON body" });
+    return;
+  }
+
+  const projectId = typeof payload.projectId === "string" ? payload.projectId.trim() : "";
+  const trackedUserId = typeof payload.trackedUserId === "string" ? payload.trackedUserId.trim() : "";
+  const start = typeof payload.start === "string" ? payload.start.trim() : undefined;
+  const end = typeof payload.end === "string" ? payload.end.trim() : undefined;
+
+  if (!projectId) {
+    sendJson(res, 400, { error: "projectId is required" });
+    return;
+  }
+  if (!trackedUserId) {
+    sendJson(res, 400, { error: "trackedUserId is required" });
+    return;
+  }
+
+  try {
+    const summary = await generatePerformanceSummary(ctx.prisma, ctx.user, {
+      projectId,
+      trackedUserId,
+      start,
+      end,
+    });
+    sendJson(res, 200, { summary });
+  } catch (error) {
+    if (error instanceof PerformanceReviewError) {
+      sendJson(res, error.statusCode, { error: error.message });
+      return;
+    }
+    throw error;
+  }
+}
+
+async function handlePerformanceComparisonRequest(req: IncomingMessage, res: ServerResponse, url: URL) {
+  const ctx = await createContext({ req });
+  if (!ctx.user) {
+    sendJson(res, 401, { error: "Authentication required" });
+    return;
+  }
+
+  const projectId = url.searchParams.get("projectId")?.trim() ?? "";
+  const trackedUserId = url.searchParams.get("trackedUserId")?.trim() ?? "";
+  const currentStart = url.searchParams.get("currentStart")?.trim() || undefined;
+  const currentEnd = url.searchParams.get("currentEnd")?.trim() || undefined;
+  const compareStart = url.searchParams.get("compareStart")?.trim() || undefined;
+  const compareEnd = url.searchParams.get("compareEnd")?.trim() || undefined;
+
+  if (!projectId) {
+    sendJson(res, 400, { error: "projectId is required" });
+    return;
+  }
+  if (!trackedUserId) {
+    sendJson(res, 400, { error: "trackedUserId is required" });
+    return;
+  }
+
+  try {
+    const comparison = await comparePerformanceMetrics(
+      ctx.prisma,
+      ctx.user,
+      { projectId, trackedUserId, start: currentStart, end: currentEnd },
+      { projectId, trackedUserId, start: compareStart, end: compareEnd },
+    );
+    sendJson(res, 200, { comparison });
+  } catch (error) {
+    if (error instanceof PerformanceReviewError) {
+      sendJson(res, error.statusCode, { error: error.message });
+      return;
+    }
+    throw error;
+  }
+}
+
+async function handlePerformanceNotesRequest(req: IncomingMessage, res: ServerResponse) {
+  const ctx = await createContext({ req });
+  if (!ctx.user) {
+    sendJson(res, 401, { error: "Authentication required" });
+    return;
+  }
+
+  const rawBody = await readBody(req);
+  if (!rawBody.length) {
+    sendJson(res, 400, { error: "Request body is required" });
+    return;
+  }
+
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(rawBody.toString()) as Record<string, unknown>;
+  } catch {
+    sendJson(res, 400, { error: "Invalid JSON body" });
+    return;
+  }
+
+  const projectId = typeof payload.projectId === "string" ? payload.projectId.trim() : "";
+  const trackedUserId = typeof payload.trackedUserId === "string" ? payload.trackedUserId.trim() : "";
+  const start = typeof payload.start === "string" ? payload.start.trim() : undefined;
+  const end = typeof payload.end === "string" ? payload.end.trim() : undefined;
+  const markdown = typeof payload.markdown === "string" ? payload.markdown : null;
+
+  if (!projectId) {
+    sendJson(res, 400, { error: "projectId is required" });
+    return;
+  }
+  if (!trackedUserId) {
+    sendJson(res, 400, { error: "trackedUserId is required" });
+    return;
+  }
+  if (markdown === null) {
+    sendJson(res, 400, { error: "markdown is required" });
+    return;
+  }
+
+  try {
+    const note = await savePerformanceNote(ctx.prisma, ctx.user, {
+      projectId,
+      trackedUserId,
+      start,
+      end,
+      markdown,
+    });
+    sendJson(res, 200, { note });
+  } catch (error) {
+    if (error instanceof PerformanceReviewError) {
+      sendJson(res, error.statusCode, { error: error.message });
+      return;
+    }
+    throw error;
+  }
 }
 
 bootstrap().catch((error) => {
