@@ -7,6 +7,222 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model User {
+  id           String            @id @default(uuid())
+  email        String            @unique
+  displayName  String
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  role         Role              @default(USER)
+  credential   Credential?
+  summaries    DailySummary[]
+  sitesCreated JiraSite[]        @relation("SiteCreator")
+  projectLinks UserProjectLink[]
+}
+
+model Credential {
+  id         String         @id @default(uuid())
+  type       CredentialType
+  secretHash String
+  userId     String         @unique
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  user       User           @relation(fields: [userId], references: [id])
+}
+
+model JiraUser {
+  id             String    @id @default(uuid())
+  accountId      String    @unique
+  displayName    String
+  email          String?
+  avatarUrl      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  comments       Comment[] @relation("CommentAuthor")
+  issuesAssignee Issue[]   @relation("IssueAssignee")
+  worklogs       Worklog[] @relation("WorklogAuthor")
+}
+
+model JiraSite {
+  id          String        @id @default(uuid())
+  alias       String        @unique
+  baseUrl     String        @unique
+  adminEmail  String
+  tokenCipher String
+  createdById String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  projects    JiraProject[]
+  createdBy   User?         @relation("SiteCreator", fields: [createdById], references: [id])
+}
+
+model JiraProject {
+  id           String               @id @default(uuid())
+  jiraId       String
+  key          String
+  name         String
+  siteId       String
+  isActive     Boolean              @default(true)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  summaries    DailySummary[]
+  issues       Issue[]
+  site         JiraSite             @relation(fields: [siteId], references: [id])
+  trackedUsers ProjectTrackedUser[]
+  syncJob      SyncJob?
+  syncLogs     SyncLog[]
+  syncStates   SyncState[]
+  accountLinks UserProjectLink[]
+
+  @@unique([siteId, jiraId])
+  @@unique([siteId, key])
+}
+
+model ProjectTrackedUser {
+  id            String      @id @default(uuid())
+  projectId     String
+  jiraAccountId String
+  displayName   String
+  email         String?
+  avatarUrl     String?
+  isTracked     Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  project       JiraProject @relation(fields: [projectId], references: [id])
+
+  @@unique([projectId, jiraAccountId])
+}
+
+model Sprint {
+  id        String    @id @default(uuid())
+  jiraId    String    @unique
+  name      String
+  state     String
+  startDate DateTime?
+  endDate   DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  issues    Issue[]
+}
+
+model Issue {
+  id            String      @id @default(uuid())
+  jiraId        String      @unique
+  key           String
+  summary       String?
+  status        String
+  assigneeId    String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  jiraCreatedAt DateTime
+  jiraUpdatedAt DateTime
+  priority      String?
+  projectId     String
+  remoteData    Json?
+  sprintId      String?
+  comments      Comment[]
+  assignee      JiraUser?   @relation("IssueAssignee", fields: [assigneeId], references: [id])
+  project       JiraProject @relation(fields: [projectId], references: [id])
+  sprint        Sprint?     @relation(fields: [sprintId], references: [id])
+  worklogs      Worklog[]
+}
+
+model Comment {
+  id            String    @id @default(uuid())
+  jiraId        String    @unique
+  issueId       String
+  body          String
+  createdAt     DateTime  @default(now())
+  authorId      String
+  jiraCreatedAt DateTime
+  jiraUpdatedAt DateTime?
+  updatedAt     DateTime  @updatedAt
+  author        JiraUser  @relation("CommentAuthor", fields: [authorId], references: [id])
+  issue         Issue     @relation(fields: [issueId], references: [id])
+}
+
+model Worklog {
+  id            String   @id @default(uuid())
+  jiraId        String   @unique
+  issueId       String
+  description   String?
+  timeSpent     Int
+  createdAt     DateTime @default(now())
+  authorId      String
+  jiraStartedAt DateTime
+  jiraUpdatedAt DateTime
+  updatedAt     DateTime @updatedAt
+  author        JiraUser @relation("WorklogAuthor", fields: [authorId], references: [id])
+  issue         Issue    @relation(fields: [issueId], references: [id])
+}
+
+model UserProjectLink {
+  id            String      @id @default(uuid())
+  userId        String
+  projectId     String
+  jiraAccountId String
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  project       JiraProject @relation(fields: [projectId], references: [id])
+  user          User        @relation(fields: [userId], references: [id])
+
+  @@unique([userId, projectId])
+}
+
+model DailySummary {
+  id        String      @id @default(uuid())
+  userId    String
+  yesterday String?
+  today     String?
+  blockers  String?
+  date      DateTime
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @default(now()) @updatedAt
+  projectId String
+  project   JiraProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User        @relation(fields: [userId], references: [id])
+
+  @@unique([userId, projectId, date])
+}
+
+model SyncJob {
+  id           String        @id @default(uuid())
+  projectId    String        @unique
+  workflowId   String        @unique
+  scheduleId   String        @unique
+  cronSchedule String
+  status       SyncJobStatus @default(ACTIVE)
+  lastRunAt    DateTime?
+  nextRunAt    DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  project      JiraProject   @relation(fields: [projectId], references: [id])
+}
+
+model SyncState {
+  id           String      @id @default(uuid())
+  projectId    String
+  entity       String
+  lastSyncTime DateTime?
+  status       SyncStatus  @default(IDLE)
+  metadata     Json?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  project      JiraProject @relation(fields: [projectId], references: [id])
+
+  @@unique([projectId, entity])
+}
+
+model SyncLog {
+  id        String      @id @default(uuid())
+  projectId String
+  level     String
+  message   String
+  details   Json?
+  createdAt DateTime    @default(now())
+  project   JiraProject @relation(fields: [projectId], references: [id])
+}
+
 enum Role {
   ADMIN
   USER
@@ -27,213 +243,4 @@ enum SyncStatus {
   RUNNING
   SUCCESS
   FAILED
-}
-
-model User {
-  id          String   @id @default(uuid())
-  email       String   @unique
-  displayName String
-  role        Role     @default(USER)
-  credential  Credential?
-  summaries   DailySummary[]
-  projectLinks UserProjectLink[]
-  sitesCreated JiraSite[] @relation("SiteCreator")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-}
-
-model Credential {
-  id         String          @id @default(uuid())
-  type       CredentialType
-  secretHash String
-  user       User            @relation(fields: [userId], references: [id])
-  userId     String          @unique
-  createdAt  DateTime        @default(now())
-  updatedAt  DateTime        @updatedAt
-}
-
-model JiraUser {
-  id            String   @id @default(uuid())
-  accountId     String   @unique
-  displayName   String
-  email         String?
-  avatarUrl     String?
-  issuesAssignee Issue[] @relation("IssueAssignee")
-  comments      Comment[] @relation("CommentAuthor")
-  worklogs      Worklog[] @relation("WorklogAuthor")
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-}
-
-model JiraSite {
-  id             String      @id @default(uuid())
-  alias          String      @unique
-  baseUrl        String      @unique
-  adminEmail     String
-  tokenCipher    String
-  createdBy      User?       @relation("SiteCreator", fields: [createdById], references: [id])
-  createdById    String?
-  projects       JiraProject[]
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
-}
-
-model JiraProject {
-  id           String            @id @default(uuid())
-  jiraId       String
-  key          String
-  name         String
-  site         JiraSite          @relation(fields: [siteId], references: [id])
-  siteId       String
-  isActive     Boolean           @default(true)
-  accountLinks UserProjectLink[]
-  trackedUsers ProjectTrackedUser[]
-  issues       Issue[]
-  syncJob      SyncJob?
-  syncStates   SyncState[]
-  syncLogs     SyncLog[]
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
-
-  @@unique([siteId, jiraId])
-  @@unique([siteId, key])
-}
-
-model ProjectTrackedUser {
-  id            String      @id @default(uuid())
-  project       JiraProject @relation(fields: [projectId], references: [id])
-  projectId     String
-  jiraAccountId String
-  displayName   String
-  email         String?
-  avatarUrl     String?
-  isTracked     Boolean     @default(true)
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
-
-  @@unique([projectId, jiraAccountId])
-}
-
-model Sprint {
-  id        String   @id @default(uuid())
-  jiraId    String   @unique
-  name      String
-  state     String
-  startDate DateTime?
-  endDate   DateTime?
-  issues    Issue[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model Issue {
-  id            String      @id @default(uuid())
-  jiraId        String      @unique
-  key           String
-  project       JiraProject @relation(fields: [projectId], references: [id])
-  projectId     String
-  summary       String?
-  status        String
-  priority      String?
-  assignee      JiraUser?   @relation("IssueAssignee", fields: [assigneeId], references: [id])
-  assigneeId    String?
-  sprint        Sprint?     @relation(fields: [sprintId], references: [id])
-  sprintId      String?
-  jiraCreatedAt DateTime
-  jiraUpdatedAt DateTime
-  remoteData    Json?
-  comments      Comment[]
-  worklogs      Worklog[]
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-}
-
-model Comment {
-  id            String   @id @default(uuid())
-  jiraId        String   @unique
-  issue         Issue    @relation(fields: [issueId], references: [id])
-  issueId       String
-  author        JiraUser @relation("CommentAuthor", fields: [authorId], references: [id])
-  authorId      String
-  body          String
-  jiraCreatedAt DateTime
-  jiraUpdatedAt DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-}
-
-model Worklog {
-  id            String   @id @default(uuid())
-  jiraId        String   @unique
-  issue         Issue    @relation(fields: [issueId], references: [id])
-  issueId       String
-  author        JiraUser @relation("WorklogAuthor", fields: [authorId], references: [id])
-  authorId      String
-  description   String?
-  timeSpent     Int
-  jiraStartedAt DateTime
-  jiraUpdatedAt DateTime
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-}
-
-model UserProjectLink {
-  id            String      @id @default(uuid())
-  user          User        @relation(fields: [userId], references: [id])
-  userId        String
-  project       JiraProject @relation(fields: [projectId], references: [id])
-  projectId     String
-  jiraAccountId String
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
-
-  @@unique([userId, projectId])
-}
-
-model DailySummary {
-  id          String   @id @default(uuid())
-  user        User     @relation(fields: [userId], references: [id])
-  userId      String
-  yesterday   String?
-  today       String?
-  blockers    String?
-  generatedAt DateTime @default(now())
-}
-
-model SyncJob {
-  id           String        @id @default(uuid())
-  project      JiraProject   @relation(fields: [projectId], references: [id])
-  projectId    String        @unique
-  workflowId   String        @unique
-  scheduleId   String        @unique
-  cronSchedule String
-  status       SyncJobStatus @default(ACTIVE)
-  lastRunAt    DateTime?
-  nextRunAt    DateTime?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-}
-
-model SyncState {
-  id           String      @id @default(uuid())
-  project      JiraProject @relation(fields: [projectId], references: [id])
-  projectId    String
-  entity       String
-  lastSyncTime DateTime?
-  status       SyncStatus  @default(IDLE)
-  metadata     Json?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
-
-  @@unique([projectId, entity])
-}
-
-model SyncLog {
-  id        String      @id @default(uuid())
-  project   JiraProject @relation(fields: [projectId], references: [id])
-  projectId String
-  level     String
-  message   String
-  details   Json?
-  createdAt DateTime    @default(now())
 }

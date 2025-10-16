@@ -1,17 +1,539 @@
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { gql, useMutation, useQuery } from "@apollo/client";
+import { AlertCircle, CheckCircle2 } from "lucide-react";
+import {
+  AISummaryPanel,
+  InlineActionPayload,
+  SummaryExport,
+  ScrumHeader,
+  UserSummaryCard,
+} from "../components/scrum";
+import type { DailySummaryRecord } from "../types/scrum";
+import { Modal } from "../components/ui/modal";
+import { Button } from "../components/ui/button";
+
+const SUMMARY_FIELDS = gql`
+  fragment SummaryFields on DailySummary {
+    id
+    projectId
+    project {
+      id
+      key
+      name
+    }
+    trackedUser {
+      id
+      jiraAccountId
+      displayName
+      email
+      avatarUrl
+      isTracked
+    }
+    jiraAccountId
+    date
+    yesterday
+    today
+    blockers
+    createdAt
+    updatedAt
+    status
+    worklogHours
+    issueCounts {
+      todo
+      inProgress
+      backlog
+    }
+    user {
+      id
+      displayName
+      email
+      role
+    }
+    workItems {
+      status
+      items {
+        issue {
+          id
+          key
+          summary
+          status
+          priority
+          jiraUpdatedAt
+          project {
+            id
+            key
+            name
+          }
+        }
+        totalWorklogHours
+        recentWorklogs {
+          id
+          description
+          timeSpent
+          jiraStartedAt
+          author {
+            id
+            displayName
+            email
+            avatarUrl
+          }
+        }
+        recentComments {
+          id
+          body
+          jiraCreatedAt
+          author {
+            id
+            displayName
+            email
+            avatarUrl
+          }
+        }
+      }
+    }
+  }
+`;
+
+const SCRUM_PROJECTS_QUERY = gql`
+  query ScrumProjects {
+    scrumProjects {
+      id
+      key
+      name
+    }
+  }
+`;
+
+const DAILY_SUMMARIES_QUERY = gql`
+  ${SUMMARY_FIELDS}
+  query DailySummaries($date: Date!, $projectId: ID!) {
+    dailySummaries(date: $date, projectId: $projectId) {
+      ...SummaryFields
+    }
+  }
+`;
+
+const REGENERATE_SUMMARY_MUTATION = gql`
+  ${SUMMARY_FIELDS}
+  mutation RegenerateDailySummary($userId: ID!, $date: Date!, $projectId: ID!) {
+    regenerateDailySummary(userId: $userId, date: $date, projectId: $projectId) {
+      ...SummaryFields
+    }
+  }
+`;
+
+const EXPORT_SUMMARIES_MUTATION = gql`
+  mutation ExportDailySummaries($date: Date!, $projectId: ID!, $target: SummaryExportTarget!) {
+    exportDailySummaries(date: $date, projectId: $projectId, target: $target) {
+      success
+      message
+      location
+    }
+  }
+`;
+
+interface ToastState {
+  type: "success" | "error";
+  message: string;
+}
+
+interface ScrumProject {
+  id: string;
+  key: string;
+  name: string;
+}
+
+const todayIsoDate = () => new Date().toISOString().slice(0, 10);
+
 export function ScrumPage() {
+  const [selectedDate, setSelectedDate] = useState<string>(todayIsoDate);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedSummaryId, setSelectedSummaryId] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const [exportInfo, setExportInfo] = useState<{ message: string; location?: string | null } | null>(null);
+  const [actionModal, setActionModal] = useState<InlineActionPayload | null>(null);
+
+  const {
+    data: projectsData,
+    loading: projectsLoading,
+    error: projectsError,
+  } = useQuery<{ scrumProjects: ScrumProject[] }>(SCRUM_PROJECTS_QUERY, {
+    fetchPolicy: "cache-first",
+  });
+
+  const projects = projectsData?.scrumProjects ?? [];
+
+  useEffect(() => {
+    if (!projects.length) {
+      setSelectedProjectId(null);
+      return;
+    }
+    if (!selectedProjectId || !projects.some((project) => project.id === selectedProjectId)) {
+      setSelectedProjectId(projects[0]?.id ?? null);
+    }
+  }, [projects, selectedProjectId]);
+
+  const {
+    data: summariesData,
+    loading: summariesLoading,
+    error: summariesError,
+    refetch: refetchSummaries,
+  } = useQuery<{ dailySummaries: DailySummaryRecord[] }>(DAILY_SUMMARIES_QUERY, {
+    variables: selectedProjectId
+      ? {
+          date: selectedDate,
+          projectId: selectedProjectId,
+        }
+      : undefined,
+    skip: !selectedProjectId,
+    fetchPolicy: "cache-and-network",
+  });
+
+  const summaries = summariesData?.dailySummaries ?? [];
+
+  useEffect(() => {
+    if (!summaries.length) {
+      setSelectedSummaryId(null);
+      return;
+    }
+    if (!selectedSummaryId || !summaries.some((summary) => summary.id === selectedSummaryId)) {
+      setSelectedSummaryId(summaries[0].id);
+    }
+  }, [summaries, selectedSummaryId]);
+
+  const selectedSummary = useMemo(
+    () => summaries.find((summary) => summary.id === selectedSummaryId) ?? null,
+    [summaries, selectedSummaryId],
+  );
+
+  const lastUpdated = selectedSummary ? new Date(selectedSummary.updatedAt).toLocaleTimeString() : null;
+
+  useEffect(() => {
+    if (!toast) {
+      return;
+    }
+    const timeout = window.setTimeout(() => setToast(null), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [toast]);
+
+  const [regenerateSummary, { loading: regenerating }] = useMutation(REGENERATE_SUMMARY_MUTATION);
+  const [exportSummaries, { loading: exporting }] = useMutation(EXPORT_SUMMARIES_MUTATION);
+
+  const handleDateChange = (value: string) => {
+    setSelectedDate(value);
+    setSelectedSummaryId(null);
+  };
+
+  const handleProjectChange = (value: string) => {
+    setSelectedProjectId(value || null);
+    setSelectedSummaryId(null);
+  };
+
+  const handleRefresh = async () => {
+    if (!selectedProjectId) {
+      return;
+    }
+    try {
+      await refetchSummaries({ date: selectedDate, projectId: selectedProjectId });
+      setToast({ type: "success", message: "Summaries refreshed" });
+    } catch (refreshError) {
+      setToast({ type: "error", message: friendlyError(refreshError) });
+    }
+  };
+
+  const handleRegenerate = async () => {
+    if (!selectedSummary || !selectedProjectId) {
+      return;
+    }
+    if (!selectedSummary.user?.id) {
+      setToast({ type: "error", message: "Link this teammate to a Jira++ user to regenerate." });
+      return;
+    }
+    try {
+      const teammateName =
+        selectedSummary.user?.displayName ?? selectedSummary.trackedUser?.displayName ?? "teammate";
+      await regenerateSummary({
+        variables: {
+          userId: selectedSummary.user.id,
+          date: selectedDate,
+          projectId: selectedProjectId,
+        },
+      });
+      await refetchSummaries({ date: selectedDate, projectId: selectedProjectId });
+      setToast({ type: "success", message: `Summary regenerated for ${teammateName}` });
+    } catch (mutationError) {
+      setToast({ type: "error", message: friendlyError(mutationError) });
+    }
+  };
+
+  const handleExport = async (target: "PDF" | "SLACK") => {
+    if (!selectedProjectId) {
+      return;
+    }
+    try {
+      const result = await exportSummaries({
+        variables: { date: selectedDate, target, projectId: selectedProjectId },
+      });
+      const payload = result.data?.exportDailySummaries;
+      if (payload?.success) {
+        setExportInfo({ message: payload.message, location: payload.location ?? null });
+        setToast({ type: "success", message: payload.message });
+      } else {
+        setToast({ type: "error", message: "Export failed" });
+      }
+    } catch (exportError) {
+      setToast({ type: "error", message: friendlyError(exportError) });
+    }
+  };
+
+  const handleAction = (payload: InlineActionPayload) => {
+    setActionModal(payload);
+  };
+
+  const handleActionSubmit = (message: string) => {
+    setToast({ type: "success", message });
+    setActionModal(null);
+  };
+
   return (
-    <section className="space-y-4">
-      <header className="space-y-2">
-        <h2 className="text-3xl font-semibold text-slate-900 dark:text-slate-100">
-          Daily Scrum Board
-        </h2>
-        <p className="text-slate-600 dark:text-slate-300">
-          AI-powered snapshots of what changed yesterday, what is on deck today, and who is blocked.
-        </p>
-      </header>
-      <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 p-6 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-400">
-        Connect the Jira integrator and generator workflows to populate summaries here.
-      </div>
+    <section className="space-y-6">
+      <ScrumHeader
+        date={selectedDate}
+        projectId={selectedProjectId}
+        projects={projects}
+        onDateChange={handleDateChange}
+        onProjectChange={handleProjectChange}
+        onRefresh={handleRefresh}
+        isRefreshing={summariesLoading}
+        projectsLoading={projectsLoading}
+        lastUpdated={lastUpdated}
+      />
+
+      {toast ? <ToastBanner toast={toast} onDismiss={() => setToast(null)} /> : null}
+
+      {projectsError ? (
+        <div className="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+          {friendlyError(projectsError)}
+        </div>
+      ) : null}
+
+      {summariesError ? (
+        <div className="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+          {friendlyError(summariesError)}
+        </div>
+      ) : null}
+
+      {!projectsLoading && projects.length === 0 ? (
+        <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300">
+          No Jira projects linked to your account. Map users in the Admin Console to enable scrum summaries.
+        </div>
+      ) : null}
+
+      {selectedProjectId ? null : projectsLoading ? (
+        <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300">
+          Loading projects…
+        </div>
+      ) : null}
+
+      {selectedProjectId ? (
+        <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
+          <div className="grid gap-4 md:grid-cols-2">
+            {summariesLoading && !summaries.length
+              ? Array.from({ length: 4 }).map((_, index) => (
+                  <div
+                    key={`placeholder-${index}`}
+                  className="h-64 rounded-3xl border border-dashed border-slate-200 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-900/40"
+                />
+              ))
+            : null}
+          {summaries.map((summary) => (
+            <UserSummaryCard
+              key={summary.id}
+              summary={summary}
+              expanded={selectedSummaryId === summary.id}
+              onToggle={() =>
+                setSelectedSummaryId((previous) =>
+                  previous === summary.id ? null : summary.id,
+                )
+              }
+              onAction={handleAction}
+            />
+          ))}
+          {!summariesLoading && selectedProjectId && !summaries.length ? (
+            <div className="col-span-full rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300">
+              No summaries available for this date.
+            </div>
+          ) : null}
+        </div>
+        <div className="flex flex-col gap-4">
+          <AISummaryPanel
+            summary={selectedSummary ?? null}
+            regenerating={regenerating}
+            onRegenerate={handleRegenerate}
+          />
+          <SummaryExport
+            onExport={handleExport}
+            isExporting={exporting}
+            lastMessage={exportInfo?.message ?? null}
+            lastLocation={exportInfo?.location ?? null}
+            disabled={!selectedProjectId}
+          />
+        </div>
+        </div>
+      ) : null}
+
+      <ActionModal
+        payload={actionModal}
+        onClose={() => setActionModal(null)}
+        onSubmit={handleActionSubmit}
+      />
     </section>
   );
+}
+
+function ToastBanner({ toast, onDismiss }: { toast: ToastState; onDismiss: () => void }) {
+  const Icon = toast.type === "success" ? CheckCircle2 : AlertCircle;
+  return (
+    <div
+      className={
+        toast.type === "success"
+          ? "flex items-center gap-2 rounded-3xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200"
+          : "flex items-center gap-2 rounded-3xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200"
+      }
+    >
+      <Icon className="h-4 w-4" />
+      <span className="flex-1">{toast.message}</span>
+      <button
+        type="button"
+        className="text-xs font-medium uppercase tracking-wide text-current"
+        onClick={onDismiss}
+      >
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
+function ActionModal({
+  payload,
+  onClose,
+  onSubmit,
+}: {
+  payload: InlineActionPayload | null;
+  onClose: () => void;
+  onSubmit: (message: string) => void;
+}) {
+  const [comment, setComment] = useState("");
+  const [assignee, setAssignee] = useState("");
+  const [status, setStatus] = useState("In Progress");
+
+  useEffect(() => {
+    setComment("");
+    setAssignee("");
+    setStatus("In Progress");
+  }, [payload?.item.issue.id, payload?.type]);
+
+  if (!payload) {
+    return null;
+  }
+
+  const issueKey = payload.item.issue.key;
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (payload.type === "comment") {
+      if (!comment.trim()) {
+        return;
+      }
+      onSubmit(`Comment queued for ${issueKey}`);
+      return;
+    }
+    if (payload.type === "reassign") {
+      if (!assignee.trim()) {
+        return;
+      }
+      onSubmit(`Reassignment queued for ${issueKey}`);
+      return;
+    }
+    onSubmit(`Status update queued for ${issueKey}`);
+  };
+
+  return (
+    <Modal
+      open={Boolean(payload)}
+      onClose={onClose}
+      title={modalTitle(payload.type, issueKey)}
+      description={`Updates will sync to Jira when integrations are connected.`}
+      primaryAction={
+        <Button type="submit" form="scrum-action-form">
+          Continue
+        </Button>
+      }
+    >
+      <form id="scrum-action-form" className="space-y-4" onSubmit={handleSubmit}>
+        {payload.type === "comment" ? (
+          <label className="block text-sm font-medium text-slate-600 dark:text-slate-300">
+            Comment
+            <textarea
+              value={comment}
+              onChange={(event) => setComment(event.target.value)}
+              className="mt-2 h-32 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-slate-600"
+              placeholder="Share context or blockers..."
+            />
+          </label>
+        ) : null}
+        {payload.type === "reassign" ? (
+          <label className="block text-sm font-medium text-slate-600 dark:text-slate-300">
+            New assignee email
+            <input
+              type="email"
+              value={assignee}
+              onChange={(event) => setAssignee(event.target.value)}
+              className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-slate-600"
+              placeholder="dev@example.com"
+            />
+          </label>
+        ) : null}
+        {payload.type === "status" ? (
+          <label className="block text-sm font-medium text-slate-600 dark:text-slate-300">
+            New status
+            <select
+              value={status}
+              onChange={(event) => setStatus(event.target.value)}
+              className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-slate-600"
+            >
+              <option value="To Do">To Do</option>
+              <option value="In Progress">In Progress</option>
+              <option value="Blocked">Blocked</option>
+              <option value="Review">Review</option>
+              <option value="Done">Done</option>
+            </select>
+          </label>
+        ) : null}
+      </form>
+    </Modal>
+  );
+}
+
+function modalTitle(action: InlineActionPayload["type"], issueKey: string) {
+  if (action === "comment") {
+    return `Add comment to ${issueKey}`;
+  }
+  if (action === "reassign") {
+    return `Reassign ${issueKey}`;
+  }
+  return `Update ${issueKey} status`;
+}
+
+function friendlyError(error: unknown): string {
+  if (!error) {
+    return "Unknown error";
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  return "An unexpected error occurred";
 }

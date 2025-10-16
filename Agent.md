@@ -2,29 +2,32 @@
 
 To keep Jira++ healthy and avoid breaking builds, we'll hold ourselves to the following loop whenever we touch the codebase:
 
-1. **Edit consciously**
+1. **Share the plan first**
+   - Before coding, outline the implementation steps you intend to take and get confirmation.
+
+2. **Edit consciously**
    - Read the spec and existing code before changing anything.
    - Keep diffs focused; note every assumption in commit messages or PR descriptions.
 
-2. **Run quick feedback commands after each logical change**
-   ```bash
-   pnpm lint
-   pnpm typecheck
-   pnpm test     # when tests exist for the area we touched
-   ```
+3. **Run quick feedback commands after each logical change**
+```bash
+pnpm lint
+pnpm typecheck
+pnpm test     # when tests exist for the area we touched
+```
    - For small edits, run `pnpm typecheck` immediately after saving.
    - Use `pnpm verify` before handing work off (runs lint, typecheck, and tests together).
 
-3. **Address failures immediately**
+4. **Address failures immediately**
    - Fix lint or type errors before moving to another task.
    - If a command can't run (network/offline), document the reason in the PR or handoff.
 
-4. **Document assumptions**
+5. **Document assumptions**
    - Update specs (e.g., `specs/feature_admin_console.md`) whenever we add new behaviour or workflow.
    - Ensure every shipped feature has its spec (`specs/feature_*.md`) refreshed with behaviour, data flow, and control surfaces.
    - Capture infrastructure or workflow changes (like this pattern) in dedicated docs.
 
-5. **Final handoff checklist**
+6. **Final handoff checklist**
    - `pnpm format` (or ensure the editor auto-formatted).
    - `pnpm verify`
    - Summarise what changed, the commands you ran, and any remaining TODOs.

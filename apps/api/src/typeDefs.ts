@@ -2,6 +2,7 @@ import { gql } from "graphql-tag";
 
 export const typeDefs = gql`
   scalar DateTime
+  scalar Date
   scalar JSON
 
   enum Role {
@@ -117,8 +118,10 @@ export const typeDefs = gql`
     key: String!
     summary: String
     status: String!
+    browseUrl: String
     priority: String
     assignee: JiraUser
+    project: JiraProject!
     sprint: Sprint
     jiraCreatedAt: DateTime!
     jiraUpdatedAt: DateTime!
@@ -134,6 +137,7 @@ export const typeDefs = gql`
     body: String!
     jiraCreatedAt: DateTime!
     jiraUpdatedAt: DateTime
+    issue: Issue!
   }
 
   type Worklog {
@@ -144,6 +148,78 @@ export const typeDefs = gql`
     timeSpent: Int
     jiraStartedAt: DateTime!
     jiraUpdatedAt: DateTime!
+  }
+
+  enum DailySummaryStatus {
+    ON_TRACK
+    DELAYED
+    BLOCKED
+  }
+
+  type IssueStatusCounts {
+    todo: Int!
+    inProgress: Int!
+    backlog: Int!
+  }
+
+  type DailySummaryWorkItem {
+    issue: Issue!
+    recentWorklogs: [Worklog!]!
+    recentComments: [Comment!]!
+    totalWorklogHours: Float!
+  }
+
+  type DailySummaryWorkItemGroup {
+    status: String!
+    items: [DailySummaryWorkItem!]!
+  }
+
+  type DailySummary {
+    id: ID!
+    user: User
+    trackedUser: ProjectTrackedUser
+    jiraAccountId: String
+    projectId: ID!
+    project: JiraProject!
+    date: Date!
+    yesterday: String
+    today: String
+    blockers: String
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    status: DailySummaryStatus!
+    worklogHours: Float!
+    issueCounts: IssueStatusCounts!
+    workItems: [DailySummaryWorkItemGroup!]!
+  }
+
+  type FocusDateRange {
+    start: Date!
+    end: Date!
+  }
+
+  type WorklogBucket {
+    date: Date!
+    hours: Float!
+  }
+
+  type FocusDashboardMetrics {
+    totalIssues: Int!
+    inProgressIssues: Int!
+    blockerIssues: Int!
+    hoursLogged: Float!
+    averageHoursPerDay: Float!
+  }
+
+  type FocusBoard {
+    projects: [JiraProject!]!
+    issues: [Issue!]!
+    blockers: [Issue!]!
+    comments: [Comment!]!
+    worklogTimeline: [WorklogBucket!]!
+    metrics: FocusDashboardMetrics!
+    dateRange: FocusDateRange!
+    updatedAt: DateTime!
   }
 
   type Sprint {
@@ -220,6 +296,9 @@ export const typeDefs = gql`
     jiraProjectOptions(siteId: ID!): [JiraProjectOption!]!
     jiraProjectUserOptions(siteId: ID!, projectKey: String!): [JiraUserOption!]!
     projectTrackedUsers(projectId: ID!): [ProjectTrackedUser!]!
+    dailySummaries(date: Date!, projectId: ID!): [DailySummary!]!
+    scrumProjects: [JiraProject!]!
+    focusBoard(projectIds: [ID!], start: Date, end: Date): FocusBoard!
     syncStates(projectId: ID!): [SyncState!]!
     syncLogs(projectId: ID!, limit: Int = 50): [SyncLog!]!
   }
@@ -248,6 +327,17 @@ export const typeDefs = gql`
     project: JiraProject!
   }
 
+  enum SummaryExportTarget {
+    PDF
+    SLACK
+  }
+
+  type SummaryExportResult {
+    success: Boolean!
+    message: String!
+    location: String
+  }
+
   type Mutation {
     login(input: LoginInput!): AuthPayload!
     createUser(input: CreateUserInput!): User!
@@ -262,5 +352,8 @@ export const typeDefs = gql`
     resumeProjectSync(projectId: ID!): Boolean!
     rescheduleProjectSync(projectId: ID!, cron: String!): Boolean!
     triggerProjectSync(projectId: ID!, full: Boolean = false, accountIds: [String!]): Boolean!
+    generateDailySummaries(date: Date!, projectId: ID!): [DailySummary!]!
+    regenerateDailySummary(userId: ID!, date: Date!, projectId: ID!): DailySummary!
+    exportDailySummaries(date: Date!, projectId: ID!, target: SummaryExportTarget!): SummaryExportResult!
   }
 `;

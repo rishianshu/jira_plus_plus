@@ -1,5 +1,7 @@
 import { GraphQLError } from "graphql";
-import { DateTimeResolver, JSONResolver } from "graphql-scalars";
+import path from "node:path";
+import { promises as fs } from "node:fs";
+import { DateResolver, DateTimeResolver, JSONResolver } from "graphql-scalars";
 import { CredentialType, type ProjectTrackedUser } from "@prisma/client";
 import type { RequestContext } from "./context.js";
 import { createAuthToken, encryptSecret, hashPassword, verifyPassword } from "./auth.js";
@@ -13,6 +15,13 @@ import {
   startProjectSync,
   updateNextRunFromSchedule,
 } from "./services/syncService.js";
+import {
+  exportSummariesToPdf,
+  exportSummariesToSlackPayload,
+  generateSummariesForDate,
+  generateSummaryForUser,
+} from "./services/dailySummaryService.js";
+import { buildFocusBoard } from "./services/focusBoardService.js";
 
 function requireUser(ctx: RequestContext) {
   if (!ctx.user) {
@@ -37,6 +46,7 @@ function requireAdmin(ctx: RequestContext) {
 
 export const resolvers = {
   DateTime: DateTimeResolver,
+  Date: DateResolver,
   JSON: JSONResolver,
   Query: {
     health: () => ({
@@ -112,6 +122,59 @@ export const resolvers = {
       return ctx.prisma.projectTrackedUser.findMany({
         where: { projectId: args.projectId },
         orderBy: { displayName: "asc" },
+      });
+    },
+    dailySummaries: async (
+      _parent: unknown,
+      args: { date: string; projectId: string },
+      ctx: RequestContext,
+    ) => {
+      const auth = requireUser(ctx);
+      if (auth.role !== "ADMIN") {
+        const membership = await ctx.prisma.userProjectLink.count({
+          where: { projectId: args.projectId, userId: auth.id },
+        });
+        if (!membership) {
+          throw new GraphQLError("You do not have access to this project", {
+            extensions: { code: "FORBIDDEN" },
+          });
+        }
+      }
+      return generateSummariesForDate(ctx.prisma, args.date, args.projectId);
+    },
+    scrumProjects: async (_parent: unknown, _args: unknown, ctx: RequestContext) => {
+      const auth = requireUser(ctx);
+      if (auth.role === "ADMIN") {
+        return ctx.prisma.jiraProject.findMany({
+          where: { isActive: true },
+          orderBy: { name: "asc" },
+        });
+      }
+
+      return ctx.prisma.jiraProject.findMany({
+        where: {
+          isActive: true,
+          accountLinks: {
+            some: { userId: auth.id },
+          },
+        },
+        orderBy: { name: "asc" },
+      });
+    },
+    focusBoard: async (
+      _parent: unknown,
+      args: {
+        projectIds?: string[] | null;
+        start?: string | Date | null;
+        end?: string | Date | null;
+      },
+      ctx: RequestContext,
+    ) => {
+      const auth = requireUser(ctx);
+      return buildFocusBoard(ctx.prisma, auth.id, {
+        projectIds: args.projectIds ?? null,
+        start: args.start ?? null,
+        end: args.end ?? null,
       });
     },
     syncStates: async (
@@ -471,6 +534,84 @@ export const resolvers = {
       });
       return true;
     },
+    generateDailySummaries: async (
+      _parent: unknown,
+      args: { date: string; projectId: string },
+      ctx: RequestContext,
+    ) => {
+      requireAdmin(ctx);
+      return generateSummariesForDate(ctx.prisma, args.date, args.projectId);
+    },
+    regenerateDailySummary: async (
+      _parent: unknown,
+      args: { userId: string; date: string; projectId: string },
+      ctx: RequestContext,
+    ) => {
+      const auth = requireUser(ctx);
+      if (auth.role !== "ADMIN" && auth.id !== args.userId) {
+        throw new GraphQLError("You can only regenerate your own summary", {
+          extensions: { code: "FORBIDDEN" },
+        });
+      }
+      if (auth.role !== "ADMIN") {
+        const membership = await ctx.prisma.userProjectLink.count({
+          where: { projectId: args.projectId, userId: auth.id },
+        });
+        if (!membership) {
+          throw new GraphQLError("You do not have access to this project", {
+            extensions: { code: "FORBIDDEN" },
+          });
+        }
+      }
+      return generateSummaryForUser(ctx.prisma, args.userId, args.date, args.projectId);
+    },
+    exportDailySummaries: async (
+      _parent: unknown,
+      args: { date: string; projectId: string; target: "PDF" | "SLACK" },
+      ctx: RequestContext,
+    ) => {
+      requireAdmin(ctx);
+
+      if (args.target === "PDF") {
+        const pdfPath = path.join(process.cwd(), "exports", `daily-scrum-${args.date}.pdf`);
+        await fs.mkdir(path.dirname(pdfPath), { recursive: true });
+        const { path: generatedPath } = await exportSummariesToPdf(
+          ctx.prisma,
+          args.date,
+          args.projectId,
+          pdfPath,
+        );
+        return {
+          success: true,
+          message: "Daily scrum PDF generated",
+          location: generatedPath,
+        };
+      }
+
+      if (args.target === "SLACK") {
+        const { payload } = await exportSummariesToSlackPayload(
+          ctx.prisma,
+          args.date,
+          args.projectId,
+        );
+        const filePath = path.join(
+          process.cwd(),
+          "exports",
+          `daily-scrum-${args.date}-slack.json`,
+        );
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, JSON.stringify(payload, null, 2), "utf-8");
+        return {
+          success: true,
+          message: "Slack payload generated",
+          location: filePath,
+        };
+      }
+
+      throw new GraphQLError("Unsupported export target", {
+        extensions: { code: "BAD_USER_INPUT" },
+      });
+    },
   },
   JiraProject: {
     site: (parent: any, _args: unknown, ctx: RequestContext) => {
@@ -501,6 +642,10 @@ export const resolvers = {
       if (parent.author) return parent.author;
       return ctx.prisma.comment.findUnique({ where: { id: parent.id } }).author();
     },
+    issue: (parent: any, _args: unknown, ctx: RequestContext) => {
+      if (parent.issue) return parent.issue;
+      return ctx.prisma.comment.findUnique({ where: { id: parent.id } }).issue();
+    },
   },
   Worklog: {
     author: (parent: any, _args: unknown, ctx: RequestContext) => {
@@ -508,11 +653,35 @@ export const resolvers = {
       return ctx.prisma.worklog.findUnique({ where: { id: parent.id } }).author();
     },
   },
+  DailySummary: {
+    user: (parent: any) => parent.user ?? null,
+    trackedUser: async (parent: any, _args: unknown, ctx: RequestContext) => {
+      if (parent.trackedUser) {
+        return parent.trackedUser;
+      }
+      const accountId = parent.primaryAccountId ?? parent.jiraAccountId ?? parent.jiraAccountIds?.[0];
+      if (!accountId || !parent.projectId) {
+        return null;
+      }
+      return ctx.prisma.projectTrackedUser.findFirst({
+        where: { projectId: parent.projectId, jiraAccountId: accountId },
+      });
+    },
+    jiraAccountId: (parent: any) => parent.primaryAccountId ?? parent.jiraAccountId ?? parent.jiraAccountIds?.[0] ?? null,
+    project: (parent: any, _args: unknown, ctx: RequestContext) => {
+      if (parent.project) return parent.project;
+      return ctx.prisma.jiraProject.findUnique({ where: { id: parent.projectId } });
+    },
+  },
   Issue: {
     assignee: (parent: any, _args: unknown, ctx: RequestContext) => {
       if (parent.assignee) return parent.assignee;
       if (!parent.assigneeId) return null;
       return ctx.prisma.jiraUser.findUnique({ where: { id: parent.assigneeId } });
+    },
+    project: (parent: any, _args: unknown, ctx: RequestContext) => {
+      if (parent.project) return parent.project;
+      return ctx.prisma.issue.findUnique({ where: { id: parent.id } }).project();
     },
     comments: (parent: any, _args: unknown, ctx: RequestContext) => {
       if (parent.comments) return parent.comments;

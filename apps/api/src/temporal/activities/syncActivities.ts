@@ -39,6 +39,43 @@ interface SyncIssuesBatchResult {
   lastUpdatedAt?: string | null;
 }
 
+function extractCommentBody(comment: any): string {
+  if (!comment) {
+    return "";
+  }
+
+  if (typeof comment.body === "string") {
+    return comment.body;
+  }
+
+  const collectText = (node: any): string => {
+    if (!node) {
+      return "";
+    }
+    let text = "";
+    if (typeof node.text === "string") {
+      text += node.text;
+    }
+    if (Array.isArray(node.content)) {
+      text += node.content.map(collectText).join("");
+    }
+    return text;
+  };
+
+  if (comment.body && typeof comment.body === "object") {
+    const docText = collectText(comment.body);
+    if (docText.trim()) {
+      return docText.trim();
+    }
+  }
+
+  if (typeof comment.renderedBody === "string") {
+    return comment.renderedBody.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  }
+
+  return "";
+}
+
 export async function prepareProjectSync(
   args: PrepareProjectSyncArgs,
 ): Promise<PrepareProjectSyncResult> {
@@ -385,20 +422,21 @@ const assigneeId = await upsertJiraUser(fields.assignee, detail.id);
   const comments = detail.fields?.comment?.comments ?? [];
   for (const comment of comments) {
     const commentAuthorId = await upsertJiraUser(comment.author, comment.id);
+    const commentBody = extractCommentBody(comment);
     await prisma.comment.upsert({
       where: { jiraId: comment.id },
       create: {
         jiraId: comment.id,
         issueId: issueRecord.id,
         authorId: commentAuthorId,
-        body: comment.body ?? "",
+        body: commentBody,
         jiraCreatedAt: comment.created ? new Date(comment.created) : new Date(),
         jiraUpdatedAt: comment.updated ? new Date(comment.updated) : null,
       },
       update: {
         issueId: issueRecord.id,
         authorId: commentAuthorId,
-        body: comment.body ?? "",
+        body: commentBody,
         jiraUpdatedAt: comment.updated ? new Date(comment.updated) : null,
       },
     });

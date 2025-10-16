@@ -199,21 +199,148 @@ export async function fetchJiraIssueDetail(params: {
   adminEmail: string;
   token: string;
   issueIdOrKey: string;
+  includeComments?: boolean;
+  includeWorklogs?: boolean;
 }): Promise<any> {
-  const url = new URL(
+  const issueUrl = new URL(
     `${params.baseUrl.replace(/\/$/, "")}/rest/api/3/issue/${encodeURIComponent(params.issueIdOrKey)}`,
   );
-  url.searchParams.set("expand", "renderedFields,comment,worklog,changelog");
-  url.searchParams.set("fields", "summary,status,priority,assignee,updated,created");
+  issueUrl.searchParams.set("expand", "renderedFields,comment,changelog");
+  issueUrl.searchParams.set("fields", "summary,status,priority,assignee,updated,created");
 
-  const response = await fetch(url, {
+  const issueResponse = await fetch(issueUrl, {
     headers: buildAuthHeaders(params.adminEmail, params.token),
   });
 
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(`Failed to fetch issue details (${response.status}): ${message}`);
+  if (!issueResponse.ok) {
+    const message = await issueResponse.text();
+    throw new Error(`Failed to fetch issue details (${issueResponse.status}): ${message}`);
   }
 
-  return response.json();
+  const detail = (await issueResponse.json()) as any;
+
+  if (!detail.fields) {
+    detail.fields = {};
+  }
+
+  if (params.includeComments ?? true) {
+    const commentData = await fetchJiraIssueComments({
+      baseUrl: params.baseUrl,
+      adminEmail: params.adminEmail,
+      token: params.token,
+      issueIdOrKey: params.issueIdOrKey,
+    });
+    detail.fields.comment = commentData;
+  }
+
+  if (params.includeWorklogs ?? true) {
+    const worklogData = await fetchJiraIssueWorklogs({
+      baseUrl: params.baseUrl,
+      adminEmail: params.adminEmail,
+      token: params.token,
+      issueIdOrKey: params.issueIdOrKey,
+    });
+    detail.fields.worklog = worklogData;
+  }
+
+  return detail;
+}
+
+export async function fetchJiraIssueComments(params: {
+  baseUrl: string;
+  adminEmail: string;
+  token: string;
+  issueIdOrKey: string;
+}): Promise<{ comments: any[]; total: number; maxResults: number }> {
+  const results: any[] = [];
+  let startAt = 0;
+  let total = 0;
+  let maxResults = 0;
+
+  // Jira paginates comments; request in batches to collect all entries.
+  do {
+    const url = new URL(
+      `${params.baseUrl.replace(/\/$/, "")}/rest/api/3/issue/${encodeURIComponent(params.issueIdOrKey)}/comment`,
+    );
+    url.searchParams.set("startAt", String(startAt));
+    url.searchParams.set("maxResults", "100");
+    url.searchParams.set("expand", "renderedBody");
+
+    const response = await fetch(url, {
+      headers: buildAuthHeaders(params.adminEmail, params.token),
+    });
+
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(`Failed to fetch comments (${response.status}): ${message}`);
+    }
+
+    const data = (await response.json()) as {
+      comments: any[];
+      total: number;
+      maxResults: number;
+    };
+
+    if (Array.isArray(data.comments)) {
+      results.push(...data.comments);
+    }
+    total = data.total ?? results.length;
+    maxResults = data.maxResults ?? 100;
+    startAt += data.comments?.length ?? 0;
+  } while (startAt < total);
+
+  return {
+    comments: results,
+    total,
+    maxResults,
+  };
+}
+
+export async function fetchJiraIssueWorklogs(params: {
+  baseUrl: string;
+  adminEmail: string;
+  token: string;
+  issueIdOrKey: string;
+}): Promise<{ worklogs: any[]; total: number; maxResults: number }> {
+  const results: any[] = [];
+  let startAt = 0;
+  let total = 0;
+  let maxResults = 0;
+
+  // Jira returns a maximum of 100 worklogs per request by default.
+  do {
+    const url = new URL(
+      `${params.baseUrl.replace(/\/$/, "")}/rest/api/3/issue/${encodeURIComponent(params.issueIdOrKey)}/worklog`,
+    );
+    url.searchParams.set("startAt", String(startAt));
+    url.searchParams.set("maxResults", "100");
+
+    const response = await fetch(url, {
+      headers: buildAuthHeaders(params.adminEmail, params.token),
+    });
+
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(`Failed to fetch worklogs (${response.status}): ${message}`);
+    }
+
+    const data = (await response.json()) as {
+      worklogs: any[];
+      total: number;
+      maxResults: number;
+    };
+
+    if (Array.isArray(data.worklogs)) {
+      results.push(...data.worklogs);
+    }
+    total = data.total ?? results.length;
+    maxResults = data.maxResults ?? 100;
+    startAt += data.worklogs?.length ?? 0;
+  } while (startAt < total);
+
+  return {
+    worklogs: results,
+    total,
+    maxResults,
+  };
 }
