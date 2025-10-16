@@ -4,6 +4,8 @@ export interface IssueStatusCounts {
   todo: number;
   inProgress: number;
   backlog: number;
+  done: number;
+  blocked: number;
 }
 
 export interface JiraUserRef {
@@ -35,6 +37,7 @@ export interface IssueRef {
   status: string;
   priority?: string | null;
   jiraUpdatedAt: string;
+  browseUrl?: string | null;
   project?: {
     id: string;
     key: string;

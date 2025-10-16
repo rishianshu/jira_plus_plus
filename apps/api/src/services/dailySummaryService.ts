@@ -3,6 +3,7 @@ import {
   type Comment,
   type Issue,
   type JiraProject,
+  type JiraSite,
   type PrismaClient,
   type ProjectTrackedUser,
   type User,
@@ -17,7 +18,10 @@ const STATUS_PRIORITY = ["in progress", "doing", "active", "selected", "todo", "
 const ACTIVE_STATUS_VALUES = ["In Progress", "In Review", "Selected for Development", "Blocked", "Doing"];
 const ACTIVE_STATUS_KEYWORDS = ["progress", "doing", "active", "block", "review"];
 const DONE_STATUS_VALUES = ["Done", "Closed", "Resolved", "Completed", "Cancelled"];
-const EMPTY_ISSUE_COUNTS: IssueCounts = { todo: 0, inProgress: 0, backlog: 0 };
+const EMPTY_ISSUE_COUNTS: IssueCounts = { todo: 0, inProgress: 0, backlog: 0, done: 0, blocked: 0 };
+
+type IssueWithProjectSite = Issue & { project: JiraProject & { site: JiraSite | null } };
+type IssueWithBrowse = IssueWithProjectSite & { browseUrl: string | null };
 
 export type DailySummaryStatus = "ON_TRACK" | "DELAYED" | "BLOCKED";
 
@@ -25,6 +29,8 @@ export interface IssueCounts {
   todo: number;
   inProgress: number;
   backlog: number;
+  done: number;
+  blocked: number;
 }
 
 export interface DailySummaryWorkItem {
@@ -111,7 +117,11 @@ function summarizeAssignments(issues: Issue[]): IssueCounts {
     (acc, issue) => {
       const status = issue.status ?? "";
       const lowered = status.toLowerCase();
-      if (isActiveStatus(status)) {
+      if (lowered.includes("block")) {
+        acc.blocked += 1;
+      } else if (DONE_STATUS_VALUES.some((value) => lowered.includes(value.toLowerCase()))) {
+        acc.done += 1;
+      } else if (isActiveStatus(status)) {
         acc.inProgress += 1;
       } else if (lowered.includes("backlog") || lowered.includes("todo") || lowered.includes("to do")) {
         acc.backlog += 1;
@@ -120,7 +130,7 @@ function summarizeAssignments(issues: Issue[]): IssueCounts {
       }
       return acc;
     },
-    { todo: 0, inProgress: 0, backlog: 0 },
+    { todo: 0, inProgress: 0, backlog: 0, done: 0, blocked: 0 },
   );
 }
 
@@ -136,6 +146,14 @@ function detectBlockerComments(comments: Comment[]): Comment[] {
     const body = comment.body.toLowerCase();
     return BLOCKER_KEYWORDS.some((keyword) => body.includes(keyword));
   });
+}
+
+function buildBrowseUrl(issue: IssueWithProjectSite): string | null {
+  const baseUrl = issue.project.site?.baseUrl;
+  if (!baseUrl) {
+    return null;
+  }
+  return `${baseUrl.replace(/\/$/, "")}/browse/${issue.key}`;
 }
 
 function isActiveStatus(status: string | null | undefined): boolean {
@@ -201,7 +219,7 @@ function buildBlockerSummary(blockerIssues: Issue[], blockerComments: Comment[],
 }
 
 function buildYesterdaySummary(
-  issueById: Map<string, Issue>,
+  issueById: Map<string, IssueWithBrowse>,
   contributions: Map<string, ContributionAccumulator>,
 ): string {
   const lines: string[] = [];
@@ -252,7 +270,7 @@ function buildTodaySummary(assignments: Issue[]): string {
 }
 
 function groupWorkItems(
-  issues: Issue[],
+  issues: IssueWithBrowse[],
   worklogs: Worklog[],
   comments: Comment[],
 ): DailySummaryWorkItemGroup[] {
@@ -510,7 +528,7 @@ async function generateSummaryForTarget({
       today: "Trigger a Jira sync to populate today's plan.",
       blockers: "Blocker detection will resume after the next sync.",
       status: "DELAYED",
-      issueCounts: { ...EMPTY_ISSUE_COUNTS },
+    issueCounts: { ...EMPTY_ISSUE_COUNTS },
       workItems: [],
       worklogSeconds: 0,
     };
@@ -528,7 +546,7 @@ async function generateSummaryForTarget({
 
   const jiraUserIds = jiraUsers.map((jiraUser) => jiraUser.id);
 
-  const [worklogs, comments, updatedIssues, assignedIssues] = await Promise.all([
+  const [worklogs, comments, updatedIssuesRaw, assignedIssuesRaw] = await Promise.all([
     prisma.worklog.findMany({
       where: {
         authorId: { in: jiraUserIds },
@@ -572,6 +590,11 @@ async function generateSummaryForTarget({
           lt: windowEnd.toJSDate(),
         },
       },
+      include: {
+        project: {
+          include: { site: true },
+        },
+      },
     }),
     prisma.issue.findMany({
       where: {
@@ -597,12 +620,24 @@ async function generateSummaryForTarget({
         ],
       },
       include: {
-        project: true,
+        project: {
+          include: { site: true },
+        },
       },
       orderBy: { jiraUpdatedAt: "desc" },
       take: 30,
     }),
   ]);
+
+  const assignedIssues = assignedIssuesRaw.map<IssueWithBrowse>((issue) => ({
+    ...issue,
+    browseUrl: buildBrowseUrl(issue),
+  }));
+
+  const updatedIssues = updatedIssuesRaw.map<IssueWithBrowse>((issue) => ({
+    ...issue,
+    browseUrl: buildBrowseUrl(issue),
+  }));
 
   const touchedIssueIds = new Set<string>();
   for (const worklog of worklogs) {
@@ -615,16 +650,23 @@ async function generateSummaryForTarget({
     touchedIssueIds.add(issue.id);
   }
 
-  const issues = await prisma.issue.findMany({
+  const issuesRaw = await prisma.issue.findMany({
     where: {
       id: { in: Array.from(touchedIssueIds) },
     },
     include: {
-      project: true,
+      project: {
+        include: { site: true },
+      },
     },
   });
 
-  const issueById = new Map<string, Issue>();
+  const issues = issuesRaw.map<IssueWithBrowse>((issue) => ({
+    ...issue,
+    browseUrl: buildBrowseUrl(issue),
+  }));
+
+  const issueById = new Map<string, IssueWithBrowse>();
   for (const issue of [...issues, ...assignedIssues]) {
     issueById.set(issue.id, issue);
   }

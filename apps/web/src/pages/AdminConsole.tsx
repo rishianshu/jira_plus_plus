@@ -6,15 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { gql, useLazyQuery, useMutation, useQuery } from "@apollo/client";
-import {
-  BarChart3,
-  Link2,
-  LogOut,
-  PlusCircle,
-  ServerCog,
-  ShieldCheck,
-  Users,
-} from "lucide-react";
+import { BarChart3, Link2, PlusCircle, ServerCog, ShieldCheck, Users } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Modal } from "../components/ui/modal";
 import { useAuth } from "../providers/AuthProvider";
@@ -354,7 +346,7 @@ const formatDate = (value: string) => {
 };
 
 export function AdminConsolePage() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const { data, loading, error, refetch } = useQuery<AdminConsoleData>(ADMIN_CONSOLE_QUERY);
   const [activeModal, setActiveModal] = useState<ModalType>(null);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
@@ -469,10 +461,6 @@ export function AdminConsolePage() {
                 </span>
               </div>
             </div>
-            <Button variant="outline" onClick={() => void logout()}>
-              <LogOut className="mr-2 h-4 w-4" />
-              Sign out
-            </Button>
           </div>
           <div className="mt-8 grid gap-4 sm:grid-cols-3">
             {stats.map((stat) => (

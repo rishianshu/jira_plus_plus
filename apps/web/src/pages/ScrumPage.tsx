@@ -1,13 +1,8 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import clsx from "clsx";
 import { gql, useMutation, useQuery } from "@apollo/client";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
-import {
-  AISummaryPanel,
-  InlineActionPayload,
-  SummaryExport,
-  ScrumHeader,
-  UserSummaryCard,
-} from "../components/scrum";
+import { AISummaryDrawer, InlineActionPayload, ScrumHeader, ScrumQuickGlance, TeamMetricsBar, UserSummaryCard } from "../components/scrum";
 import type { DailySummaryRecord } from "../types/scrum";
 import { Modal } from "../components/ui/modal";
 import { Button } from "../components/ui/button";
@@ -42,6 +37,8 @@ const SUMMARY_FIELDS = gql`
       todo
       inProgress
       backlog
+      done
+      blocked
     }
     user {
       id
@@ -59,6 +56,7 @@ const SUMMARY_FIELDS = gql`
           status
           priority
           jiraUpdatedAt
+          browseUrl
           project {
             id
             key
@@ -143,15 +141,19 @@ interface ScrumProject {
   name: string;
 }
 
+type ScrumViewMode = "team" | "focus";
+
 const todayIsoDate = () => new Date().toISOString().slice(0, 10);
 
 export function ScrumPage() {
   const [selectedDate, setSelectedDate] = useState<string>(todayIsoDate);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedSummaryId, setSelectedSummaryId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ScrumViewMode>("team");
   const [toast, setToast] = useState<ToastState | null>(null);
-  const [exportInfo, setExportInfo] = useState<{ message: string; location?: string | null } | null>(null);
   const [actionModal, setActionModal] = useState<InlineActionPayload | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState<boolean>(false);
+  const [drawerOpen, setDrawerOpen] = useState<boolean>(false);
 
   const {
     data: projectsData,
@@ -192,6 +194,16 @@ export function ScrumPage() {
   const summaries = summariesData?.dailySummaries ?? [];
 
   useEffect(() => {
+    if (!autoRefresh || !selectedProjectId) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void refetchSummaries({ date: selectedDate, projectId: selectedProjectId });
+    }, 60000);
+    return () => window.clearInterval(timer);
+  }, [autoRefresh, refetchSummaries, selectedDate, selectedProjectId]);
+
+  useEffect(() => {
     if (!summaries.length) {
       setSelectedSummaryId(null);
       return;
@@ -201,12 +213,84 @@ export function ScrumPage() {
     }
   }, [summaries, selectedSummaryId]);
 
+  const getDisplayName = (record: DailySummaryRecord) =>
+    record.user?.displayName ?? record.trackedUser?.displayName ?? "Unassigned";
+
   const selectedSummary = useMemo(
     () => summaries.find((summary) => summary.id === selectedSummaryId) ?? null,
     [summaries, selectedSummaryId],
   );
 
-  const lastUpdated = selectedSummary ? new Date(selectedSummary.updatedAt).toLocaleTimeString() : null;
+  const teamMetrics = useMemo(() => {
+    if (!summaries.length) {
+      return {
+        hoursLogged: 0,
+        pending: 0,
+        blocked: 0,
+        done: 0,
+        backlog: 0,
+        headline: null as string | null,
+      };
+    }
+
+    let hoursLogged = 0;
+    let pending = 0;
+    let blocked = 0;
+    let done = 0;
+    let backlog = 0;
+    let topByHours: DailySummaryRecord | null = null;
+    let topBlocked: DailySummaryRecord | null = null;
+
+    for (const summary of summaries) {
+      hoursLogged += summary.worklogHours;
+      done += summary.issueCounts.done;
+      blocked += summary.issueCounts.blocked;
+      pending += summary.issueCounts.todo + summary.issueCounts.inProgress;
+      backlog += summary.issueCounts.backlog;
+
+      if (!topByHours || summary.worklogHours > topByHours.worklogHours) {
+        topByHours = summary;
+      }
+      if (!topBlocked && summary.issueCounts.blocked > 0) {
+        topBlocked = summary;
+      }
+    }
+
+    let headline: string | null = null;
+    if (topBlocked) {
+      headline = `${getDisplayName(topBlocked)} has ${topBlocked.issueCounts.blocked} blocker(s)`;
+    } else if (topByHours && topByHours.worklogHours > 0) {
+      headline = `Top output: ${getDisplayName(topByHours)} (${topByHours.worklogHours.toFixed(1)}h)`;
+    }
+
+    return {
+      hoursLogged,
+      pending,
+      blocked,
+      done,
+      backlog,
+      headline,
+    };
+  }, [summaries]);
+
+  const lastUpdated = useMemo(() => {
+    if (!summaries.length) {
+      return null;
+    }
+    const timestamps = summaries
+      .map((summary) => new Date(summary.updatedAt).getTime())
+      .filter((value) => !Number.isNaN(value));
+    if (!timestamps.length) {
+      return null;
+    }
+    return new Date(Math.max(...timestamps)).toLocaleTimeString();
+  }, [summaries]);
+
+  useEffect(() => {
+    if (viewMode === "focus" && !selectedSummary && summaries.length) {
+      setSelectedSummaryId(summaries[0].id);
+    }
+  }, [viewMode, selectedSummary, summaries]);
 
   useEffect(() => {
     if (!toast) {
@@ -276,7 +360,6 @@ export function ScrumPage() {
       });
       const payload = result.data?.exportDailySummaries;
       if (payload?.success) {
-        setExportInfo({ message: payload.message, location: payload.location ?? null });
         setToast({ type: "success", message: payload.message });
       } else {
         setToast({ type: "error", message: "Export failed" });
@@ -295,99 +378,166 @@ export function ScrumPage() {
     setActionModal(null);
   };
 
+  const handleSelectSummary = (summaryId: string) => {
+    setSelectedSummaryId(summaryId);
+    setDrawerOpen(true);
+  };
+
   return (
-    <section className="space-y-6">
-      <ScrumHeader
-        date={selectedDate}
-        projectId={selectedProjectId}
-        projects={projects}
-        onDateChange={handleDateChange}
-        onProjectChange={handleProjectChange}
-        onRefresh={handleRefresh}
-        isRefreshing={summariesLoading}
-        projectsLoading={projectsLoading}
-        lastUpdated={lastUpdated}
-      />
+    <div className="-mx-6 space-y-6 px-4 sm:-mx-8 sm:px-6 lg:-mx-12 lg:px-10 xl:-mx-16 xl:px-14">
+      <section className="space-y-6">
+        <ScrumHeader
+          date={selectedDate}
+          projectId={selectedProjectId}
+          projects={projects}
+          onDateChange={handleDateChange}
+          onProjectChange={handleProjectChange}
+          onRefresh={handleRefresh}
+          isRefreshing={summariesLoading}
+          projectsLoading={projectsLoading}
+          lastUpdated={lastUpdated}
+          autoRefresh={autoRefresh}
+          onAutoRefreshChange={setAutoRefresh}
+          onExport={handleExport}
+          exporting={exporting}
+        />
 
-      {toast ? <ToastBanner toast={toast} onDismiss={() => setToast(null)} /> : null}
+        <TeamMetricsBar
+          hoursLogged={teamMetrics.hoursLogged}
+          pending={teamMetrics.pending}
+          blocked={teamMetrics.blocked}
+          done={teamMetrics.done}
+          backlog={teamMetrics.backlog}
+          focusHeadline={teamMetrics.headline}
+        />
 
-      {projectsError ? (
-        <div className="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
-          {friendlyError(projectsError)}
-        </div>
-      ) : null}
+        {toast ? <ToastBanner toast={toast} onDismiss={() => setToast(null)} /> : null}
 
-      {summariesError ? (
-        <div className="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
-          {friendlyError(summariesError)}
-        </div>
-      ) : null}
+        {projectsError ? (
+          <div className="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+            {friendlyError(projectsError)}
+          </div>
+        ) : null}
 
-      {!projectsLoading && projects.length === 0 ? (
-        <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300">
-          No Jira projects linked to your account. Map users in the Admin Console to enable scrum summaries.
-        </div>
-      ) : null}
+        {summariesError ? (
+          <div className="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+            {friendlyError(summariesError)}
+          </div>
+        ) : null}
 
-      {selectedProjectId ? null : projectsLoading ? (
-        <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300">
-          Loading projects…
-        </div>
-      ) : null}
+        {!projectsLoading && projects.length === 0 ? (
+          <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300">
+            No Jira projects linked to your account. Map users in the Admin Console to enable scrum summaries.
+          </div>
+        ) : null}
 
-      {selectedProjectId ? (
-        <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
-          <div className="grid gap-4 md:grid-cols-2">
-            {summariesLoading && !summaries.length
-              ? Array.from({ length: 4 }).map((_, index) => (
-                  <div
-                    key={`placeholder-${index}`}
-                  className="h-64 rounded-3xl border border-dashed border-slate-200 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-900/40"
+        {selectedProjectId ? null : projectsLoading ? (
+          <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300">
+            Loading projects…
+          </div>
+        ) : null}
+
+        {selectedProjectId ? (
+          <>
+            {summaries.length ? (
+              <section className="space-y-4">
+                <div className="inline-flex rounded-full border border-slate-200 bg-white p-1 shadow-sm shadow-slate-200/60 dark:border-slate-700 dark:bg-slate-950/40 dark:shadow-slate-950/50">
+                  {(
+                    [
+                      { id: "team" as ScrumViewMode, label: "Team Overview" },
+                      { id: "focus" as ScrumViewMode, label: "Focus Mode" },
+                    ] as const
+                  ).map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => {
+                        setViewMode(option.id);
+                        if (option.id === "focus") {
+                          setDrawerOpen(true);
+                        }
+                      }}
+                      disabled={option.id === "focus" && !summaries.length}
+                      className={clsx(
+                        "rounded-full px-4 py-2 text-sm font-medium transition",
+                        viewMode === option.id
+                          ? "bg-sky-500 text-white shadow-sm shadow-sky-500/40 dark:bg-sky-400 dark:text-slate-900"
+                          : "text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-300 dark:hover:bg-slate-900/60",
+                      )}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <ScrumQuickGlance
+                  summaries={summaries}
+                  selectedId={selectedSummaryId}
+                  onSelect={handleSelectSummary}
                 />
-              ))
-            : null}
-          {summaries.map((summary) => (
-            <UserSummaryCard
-              key={summary.id}
-              summary={summary}
-              expanded={selectedSummaryId === summary.id}
-              onToggle={() =>
-                setSelectedSummaryId((previous) =>
-                  previous === summary.id ? null : summary.id,
-                )
-              }
-              onAction={handleAction}
-            />
-          ))}
-          {!summariesLoading && selectedProjectId && !summaries.length ? (
-            <div className="col-span-full rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300">
-              No summaries available for this date.
-            </div>
-          ) : null}
-        </div>
-        <div className="flex flex-col gap-4">
-          <AISummaryPanel
-            summary={selectedSummary ?? null}
-            regenerating={regenerating}
-            onRegenerate={handleRegenerate}
-          />
-          <SummaryExport
-            onExport={handleExport}
-            isExporting={exporting}
-            lastMessage={exportInfo?.message ?? null}
-            lastLocation={exportInfo?.location ?? null}
-            disabled={!selectedProjectId}
-          />
-        </div>
-        </div>
-      ) : null}
+              </section>
+            ) : null}
 
-      <ActionModal
-        payload={actionModal}
-        onClose={() => setActionModal(null)}
-        onSubmit={handleActionSubmit}
+            {viewMode === "team" ? (
+              <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
+                {summariesLoading && !summaries.length
+                  ? Array.from({ length: 4 }).map((_, index) => (
+                      <div
+                        key={`placeholder-${index}`}
+                        className="h-64 rounded-3xl border border-dashed border-slate-200 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-900/40"
+                      />
+                    ))
+                  : null}
+                {summaries.map((summary) => (
+                  <UserSummaryCard
+                    key={summary.id}
+                    summary={summary}
+                    expanded={false}
+                    onToggle={() => {
+                      setSelectedSummaryId(summary.id);
+                      setDrawerOpen(true);
+                    }}
+                    onAction={handleAction}
+                  />
+                ))}
+                {!summariesLoading && selectedProjectId && !summaries.length ? (
+                  <div className="col-span-full rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300">
+                    No summaries available for this date.
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {selectedSummary ? (
+                  <UserSummaryCard
+                    summary={selectedSummary}
+                    expanded
+                    onToggle={() => setDrawerOpen(true)}
+                    onAction={handleAction}
+                  />
+                ) : (
+                  <div className="rounded-3xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300">
+                    Select a teammate from the quick glance to view their full update.
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        ) : null}
+
+        <ActionModal
+          payload={actionModal}
+          onClose={() => setActionModal(null)}
+          onSubmit={handleActionSubmit}
+        />
+      </section>
+      <AISummaryDrawer
+        open={drawerOpen && Boolean(selectedSummary)}
+        summary={selectedSummary}
+        regenerating={regenerating}
+        onRegenerate={handleRegenerate}
+        onClose={() => setDrawerOpen(false)}
       />
-    </section>
+    </div>
   );
 }
 

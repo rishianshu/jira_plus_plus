@@ -72,10 +72,14 @@ export function AISummaryPanel({ summary, regenerating, onRegenerate }: AISummar
         <SummarySection title="Today" body={summary.today} />
         <SummarySection title="Blockers" body={summary.blockers} />
       </div>
-      <div className="mt-auto grid grid-cols-3 gap-3 text-center text-sm">
+      <div className="mt-auto grid grid-cols-2 gap-3 text-center text-sm">
         <Metric label="Hours" value={`${summary.worklogHours.toFixed(1)}h`} />
-        <Metric label="In Progress" value={summary.issueCounts.inProgress.toString()} />
-        <Metric label="Backlog" value={summary.issueCounts.backlog.toString()} />
+        <Metric label="Done" value={summary.issueCounts.done.toString()} />
+        <Metric
+          label="Pending"
+          value={(summary.issueCounts.todo + summary.issueCounts.inProgress).toString()}
+        />
+        <Metric label="Blockers" value={summary.issueCounts.blocked.toString()} />
       </div>
     </aside>
   );

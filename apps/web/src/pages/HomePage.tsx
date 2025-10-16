@@ -2,8 +2,10 @@ import { ArrowRight, ShieldCheck, Sparkles, Workflow } from "lucide-react";
 import { Link } from "react-router-dom";
 import { LoginCard } from "../components/auth/LoginCard";
 import type { ReactNode } from "react";
+import { useAuth } from "../providers/AuthProvider";
 
 export function HomePage() {
+  const { user } = useAuth();
   return (
     <div className="space-y-16">
       <section className="relative overflow-hidden rounded-3xl border border-slate-200 bg-white/95 p-10 shadow-2xl shadow-slate-200/70 dark:border-slate-800 dark:bg-slate-950/80 dark:shadow-slate-950/60">
@@ -52,7 +54,7 @@ export function HomePage() {
               </Link>
             </div>
           </div>
-          <LoginCard />
+          {user?.role === "ADMIN" ? null : <LoginCard />}
         </div>
       </section>
       <section className="grid gap-6 rounded-3xl border border-slate-200 bg-white/90 p-8 shadow-lg shadow-slate-200/50 dark:border-slate-800 dark:bg-slate-900/60 dark:shadow-slate-950/50">

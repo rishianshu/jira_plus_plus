@@ -10,6 +10,7 @@ import { ApolloProvider } from "./providers/ApolloProvider";
 import { AuthProvider, useAuth } from "./providers/AuthProvider";
 import { ThemeToggle } from "./components/ui/theme-toggle";
 import { apolloClient } from "./lib/apollo-client";
+import { UserMenu } from "./components/user/UserMenu";
 
 export default function App() {
   return (
@@ -37,7 +38,7 @@ function Shell() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors dark:bg-slate-950 dark:text-slate-50">
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur dark:border-slate-800 dark:bg-slate-950/90">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-4">
+        <div className="flex items-center justify-between gap-4 px-6 py-4 sm:px-8">
           <div className="flex items-center gap-10">
             <h1 className="text-xl font-semibold tracking-tight text-slate-800 dark:text-slate-100">
               Jira++
@@ -51,16 +52,14 @@ function Shell() {
             </nav>
           </div>
           <div className="flex items-center gap-3">
-            {user ? (
-              <span className="hidden text-sm text-slate-500 dark:text-slate-300 md:inline-flex">
-                {user.displayName}
-              </span>
-            ) : null}
             <ThemeToggle />
+            {user ? (
+              <UserMenu user={user} />
+            ) : null}
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-6xl px-6 py-10">
+      <main className="px-6 py-5 sm:px-8">
         <nav className="mb-6 flex gap-2 overflow-x-auto md:hidden">
           {navigationItems.map((item) => (
             <NavLink key={item.to} className={linkClass} to={item.to} end={item.to === "/"}>

@@ -160,6 +160,8 @@ export const typeDefs = gql`
     todo: Int!
     inProgress: Int!
     backlog: Int!
+    done: Int!
+    blocked: Int!
   }
 
   type DailySummaryWorkItem {
