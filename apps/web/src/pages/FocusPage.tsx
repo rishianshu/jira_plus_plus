@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { gql, useQuery } from "@apollo/client";
 import { FocusHeader, FocusDashboard, FocusIssueList, FocusComments, WorklogTimeline } from "../components/focus";
+import { Button } from "../components/ui/button";
 import type { FocusBoardData } from "../types/focus";
 
 const FOCUS_BOARD_QUERY = gql`
@@ -63,6 +64,21 @@ const FOCUS_BOARD_QUERY = gql`
           }
         }
       }
+      issueEvents {
+        issueId
+        events {
+          id
+          type
+          occurredAt
+          body
+          hours
+          author {
+            id
+            displayName
+            avatarUrl
+          }
+        }
+      }
       worklogTimeline {
         date
         hours
@@ -79,6 +95,10 @@ const FOCUS_BOARD_QUERY = gql`
         end
       }
       updatedAt
+      warnings {
+        code
+        message
+      }
     }
   }
 `;
@@ -107,16 +127,39 @@ export function FocusPage() {
     [selectedProjectId, dateRange],
   );
 
-  const { data, previousData, loading, refetch } = useQuery<{ focusBoard: FocusBoardData }>(FOCUS_BOARD_QUERY, {
+  const { data, previousData, loading, refetch, error } = useQuery<{ focusBoard: FocusBoardData }>(FOCUS_BOARD_QUERY, {
     variables,
     fetchPolicy: "cache-and-network",
   });
 
   const board = data?.focusBoard ?? previousData?.focusBoard;
 
+  const eventsByIssueId = useMemo(() => {
+    const map: Record<string, FocusBoardData["issueEvents"][number]["events"]> = {};
+    if (!board?.issueEvents) {
+      return map;
+    }
+    for (const group of board.issueEvents) {
+      map[group.issueId] = [...group.events].sort((a, b) =>
+        b.occurredAt.localeCompare(a.occurredAt),
+      );
+    }
+    return map;
+  }, [board?.issueEvents]);
+
+  const errorMessage = useMemo(() => {
+    if (!error) {
+      return null;
+    }
+    const graphMessage = error.graphQLErrors?.[0]?.message;
+    return graphMessage ?? error.message ?? "We hit a problem loading the focus board.";
+  }, [error]);
+
   const handleRefresh = () => {
     void refetch(variables);
   };
+
+  const warnings = board?.warnings ?? [];
 
   return (
     <section className="space-y-6">
@@ -131,9 +174,33 @@ export function FocusPage() {
         isRefreshing={loading}
       />
 
+      {errorMessage ? (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-400/40 dark:bg-rose-950/40 dark:text-rose-100"
+        >
+          <span>{errorMessage}</span>
+          <Button type="button" size="sm" variant="secondary" onClick={handleRefresh} disabled={loading}>
+            Retry
+          </Button>
+        </div>
+      ) : null}
+
+      {errorMessage ? null : warnings.map((warning) => (
+        <div
+          key={warning.code}
+          role="status"
+          className="rounded-3xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-400/40 dark:bg-amber-900/40 dark:text-amber-100"
+        >
+          {warning.message}
+        </div>
+      ))}
+
       {!board ? (
         <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm shadow-slate-200/60 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300 dark:shadow-slate-950/40">
-          {loading ? "Loading your focus board…" : "No data available for the selected filters."}
+          {loading
+            ? "Loading your focus board…"
+            : errorMessage ?? "No data available for the selected filters."}
         </div>
       ) : (
         <>
@@ -142,11 +209,13 @@ export function FocusPage() {
             <div className="space-y-6">
               <FocusIssueList
                 issues={board.issues}
+                eventsByIssueId={eventsByIssueId}
                 title="My Assigned Issues"
                 emptyState="No assigned issues were found across your projects."
               />
               <FocusIssueList
                 issues={board.blockers}
+                eventsByIssueId={eventsByIssueId}
                 title="Blockers"
                 emptyState="Great news—no blockers detected for this time range."
               />

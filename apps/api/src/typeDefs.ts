@@ -211,15 +211,41 @@ export const typeDefs = gql`
     averageHoursPerDay: Float!
   }
 
+  enum FocusIssueEventType {
+    COMMENT
+    WORKLOG
+  }
+
+  type FocusIssueEvent {
+    id: ID!
+    type: FocusIssueEventType!
+    occurredAt: DateTime!
+    author: JiraUser
+    body: String
+    hours: Float
+  }
+
+  type FocusIssueEventGroup {
+    issueId: ID!
+    events: [FocusIssueEvent!]!
+  }
+
+  type FocusBoardWarning {
+    code: String!
+    message: String!
+  }
+
   type FocusBoard {
     projects: [JiraProject!]!
     issues: [Issue!]!
     blockers: [Issue!]!
     comments: [Comment!]!
+    issueEvents: [FocusIssueEventGroup!]!
     worklogTimeline: [WorklogBucket!]!
     metrics: FocusDashboardMetrics!
     dateRange: FocusDateRange!
     updatedAt: DateTime!
+    warnings: [FocusBoardWarning!]!
   }
 
   type Sprint {

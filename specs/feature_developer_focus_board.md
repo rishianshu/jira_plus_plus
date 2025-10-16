@@ -12,6 +12,10 @@ Provide developers with a focused workspace showing only relevant Jira issues, c
 - Show time spent, remaining effort, and dashboard metrics (totals, worklog per day, velocity indicators) to support daily planning.
 - Support quick actions: log work, add comment, mark blocker resolved.
 - Allow filtering the view by custom **date range** (start/end) to analyse performance over any period.
+- Maintain three distinct views over activity:
+  - **Assigned Issues:** obeys the chosen project/date filters and only shows work currently tied to the developer.
+  - **Activity Panels (Comments & Worklogs):** scoped by project + date range + developer identity so the board reflects the user’s individual contributions.
+  - **Issue Timelines:** when an issue card expands, it reveals the full historical timeline (all comments/worklogs for that issue) to provide deeper context beyond the filtered window.
 
 ---
 

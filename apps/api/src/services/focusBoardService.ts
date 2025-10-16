@@ -1,5 +1,5 @@
 import { DateTime } from "luxon";
-import type { Comment, Issue, JiraProject, JiraSite, PrismaClient, Worklog } from "@prisma/client";
+import type { Comment, Issue, JiraProject, JiraSite, JiraUser, PrismaClient, Worklog } from "@prisma/client";
 
 const BLOCKER_STATUS_KEYWORDS = ["block", "blocked", "imped", "hold", "waiting"];
 const IN_PROGRESS_STATUS_KEYWORDS = ["progress", "doing", "active", "review", "selected"];
@@ -24,17 +24,40 @@ export interface WorklogBucket {
   hours: number;
 }
 
+export type FocusIssueEventType = "COMMENT" | "WORKLOG";
+
+export interface FocusIssueEvent {
+  id: string;
+  type: FocusIssueEventType;
+  occurredAt: Date;
+  author: JiraUser | null;
+  body?: string | null;
+  hours?: number | null;
+}
+
+export interface FocusIssueEventGroup {
+  issueId: string;
+  events: FocusIssueEvent[];
+}
+
 type IssueWithProjectSite = Issue & { project: JiraProject & { site: JiraSite } };
+
+export interface FocusBoardWarning {
+  code: string;
+  message: string;
+}
 
 export interface FocusBoardResult {
   projects: JiraProject[];
   issues: Array<IssueWithProjectSite & { browseUrl: string | null }>;
   blockers: Array<IssueWithProjectSite & { browseUrl: string | null }>;
   comments: Array<Comment & { issue: IssueWithProjectSite & { browseUrl: string | null } }>;
+  issueEvents: FocusIssueEventGroup[];
   worklogTimeline: WorklogBucket[];
   metrics: FocusDashboardMetrics;
   dateRange: { start: string; end: string };
   updatedAt: Date;
+  warnings: FocusBoardWarning[];
 }
 
 interface NormalizedRange {
@@ -163,6 +186,7 @@ export async function buildFocusBoard(
       },
       dateRange: { start: start.toISODate(), end: end.toISODate() },
       updatedAt: new Date(),
+      warnings: [],
     };
   }
 
@@ -229,32 +253,83 @@ export async function buildFocusBoard(
 
   const blockers = issues.filter((issue) => isBlockedStatus(issue.status));
 
-  const commentResults = await prisma.comment.findMany({
-    where: {
-      issue: {
-        projectId: { in: projectIds },
-      },
-      author: {
-        accountId: { in: accountIds },
-      },
-      jiraCreatedAt: {
-        gte: start.toJSDate(),
-        lte: end.toJSDate(),
-      },
-    },
-    include: {
-      issue: {
-        include: {
-          project: { include: { site: true } },
-        },
-      },
-      author: true,
-    },
-    orderBy: { jiraCreatedAt: "desc" },
-    take: 50,
-  });
+  const warnings: FocusBoardWarning[] = [];
 
-  const comments = commentResults.map((comment) => ({
+  const panelCommentResults = await (async () => {
+    try {
+      return await prisma.comment.findMany({
+        where: {
+          issue: {
+            projectId: { in: projectIds },
+          },
+          author: {
+            accountId: { in: accountIds },
+          },
+          jiraCreatedAt: {
+            gte: start.toJSDate(),
+            lte: end.toJSDate(),
+          },
+        },
+        include: {
+          issue: {
+            include: {
+              project: { include: { site: true } },
+            },
+          },
+          author: true,
+        },
+        orderBy: { jiraCreatedAt: "desc" },
+        take: 50,
+      });
+    } catch (error) {
+      console.error("[FocusBoard] Failed to load comments", {
+        userId,
+        projectIds,
+        error,
+      });
+      warnings.push({
+        code: "COMMENTS_PANEL_UNAVAILABLE",
+        message: "Unable to load your recent focus comments.",
+      });
+      return [];
+    }
+  })();
+
+  const timelineCommentResults = await (async () => {
+    if (!issues.length) {
+      return [];
+    }
+    try {
+      return await prisma.comment.findMany({
+        where: {
+          issueId: { in: issues.map((issue) => issue.id) },
+        },
+        include: {
+          issue: {
+            include: {
+              project: { include: { site: true } },
+            },
+          },
+          author: true,
+        },
+        orderBy: { jiraCreatedAt: "desc" },
+      });
+    } catch (error) {
+      console.error("[FocusBoard] Failed to load timeline comments", {
+        userId,
+        projectIds,
+        issueCount: issues.length,
+        error,
+      });
+      warnings.push({
+        code: "COMMENTS_TIMELINE_UNAVAILABLE",
+        message: "Issue timelines may be missing comments right now.",
+      });
+      return [];
+    }
+  })();
+
+  const comments = panelCommentResults.map((comment) => ({
     ...comment,
     issue: {
       ...comment.issue,
@@ -262,28 +337,130 @@ export async function buildFocusBoard(
     },
   }));
 
-  const worklogs = await prisma.worklog.findMany({
-    where: {
-      author: {
-        accountId: { in: accountIds },
-      },
-      jiraStartedAt: {
-        gte: start.toJSDate(),
-        lte: end.toJSDate(),
-      },
-    },
-    include: {
-      issue: {
-        include: {
-          project: true,
+  const panelWorklogResults = await (async () => {
+    try {
+      return await prisma.worklog.findMany({
+        where: {
+          issue: {
+            projectId: { in: projectIds },
+          },
+          author: {
+            accountId: { in: accountIds },
+          },
+          jiraStartedAt: {
+            gte: start.toJSDate(),
+            lte: end.toJSDate(),
+          },
         },
-      },
-      author: true,
-    },
-    orderBy: { jiraStartedAt: "asc" },
-  });
+        include: {
+          issue: {
+            include: {
+              project: true,
+            },
+          },
+          author: true,
+        },
+        orderBy: { jiraStartedAt: "asc" },
+      });
+    } catch (error) {
+      console.error("[FocusBoard] Failed to load worklogs", {
+        userId,
+        projectIds,
+        error,
+      });
+      warnings.push({
+        code: "WORKLOGS_PANEL_UNAVAILABLE",
+        message: "Unable to load your recent focus worklogs.",
+      });
+      return [];
+    }
+  })();
 
-  const totalWorkSeconds = worklogs.reduce((sum, item) => sum + (item.timeSpent ?? 0), 0);
+  const timelineWorklogResults = await (async () => {
+    if (!issues.length) {
+      return [];
+    }
+    try {
+      return await prisma.worklog.findMany({
+        where: {
+          issueId: { in: issues.map((issue) => issue.id) },
+        },
+        include: {
+          issue: {
+            include: {
+              project: true,
+            },
+          },
+          author: true,
+        },
+        orderBy: { jiraStartedAt: "asc" },
+      });
+    } catch (error) {
+      console.error("[FocusBoard] Failed to load timeline worklogs", {
+        userId,
+        projectIds,
+        issueCount: issues.length,
+        error,
+      });
+      warnings.push({
+        code: "WORKLOGS_TIMELINE_UNAVAILABLE",
+        message: "Issue timelines may be missing worklogs right now.",
+      });
+      return [];
+    }
+  })();
+
+  const relevantIssueIds = new Set(issues.map((issue) => issue.id));
+  const issueEventMap = new Map<string, FocusIssueEvent[]>();
+
+  for (const issue of issues) {
+    issueEventMap.set(issue.id, []);
+  }
+
+  const pushEvent = (issueId: string, event: FocusIssueEvent) => {
+    if (!relevantIssueIds.has(issueId)) {
+      return;
+    }
+    const existing = issueEventMap.get(issueId);
+    if (existing) {
+      existing.push(event);
+    } else {
+      issueEventMap.set(issueId, [event]);
+    }
+  };
+
+  for (const comment of timelineCommentResults) {
+    pushEvent(comment.issueId, {
+      id: comment.id,
+      type: "COMMENT",
+      occurredAt: comment.jiraCreatedAt,
+      author: comment.author ?? null,
+      body: comment.body ?? null,
+      hours: null,
+    });
+  }
+
+  for (const worklog of timelineWorklogResults) {
+    pushEvent(worklog.issueId, {
+      id: worklog.id,
+      type: "WORKLOG",
+      occurredAt: worklog.jiraStartedAt,
+      author: worklog.author ?? null,
+      body: typeof worklog.description === "string" ? worklog.description : null,
+      hours: worklog.timeSpent != null ? Number((worklog.timeSpent / 3600).toFixed(2)) : null,
+    });
+  }
+
+  const issueEvents: FocusIssueEventGroup[] = Array.from(issueEventMap.entries()).map(
+    ([issueId, events]) => ({
+      issueId,
+      events: [...events].sort(
+        (a, b) => b.occurredAt.getTime() - a.occurredAt.getTime(),
+      ),
+    }),
+  );
+
+  const totalWorkSeconds = panelWorklogResults.reduce((sum, item) => sum + (item.timeSpent ?? 0), 0);
   const hoursLogged = Number((totalWorkSeconds / 3600).toFixed(2));
   const averageHours = Number((hoursLogged / days).toFixed(2));
 
@@ -300,9 +477,11 @@ export async function buildFocusBoard(
     issues,
     blockers,
     comments,
-    worklogTimeline: buildWorklogTimeline(worklogs),
+    issueEvents,
+    worklogTimeline: buildWorklogTimeline(panelWorklogResults),
     metrics,
     dateRange: { start: start.toISODate(), end: end.toISODate() },
     updatedAt: new Date(),
+    warnings,
   };
 }
