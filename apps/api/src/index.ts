@@ -64,7 +64,7 @@ async function bootstrap() {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? `localhost:${env.PORT}`}`);
 
     try {
-      if (url.pathname === "/healthz") {
+      if (url.pathname === "/healthz" || url.pathname === "/health") {
         sendJson(res, 200, { status: "ok", timestamp: new Date().toISOString() });
         return;
       }

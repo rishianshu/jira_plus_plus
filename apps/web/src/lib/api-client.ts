@@ -1,4 +1,4 @@
-const DEFAULT_GRAPHQL_ENDPOINT = "http://localhost:4000/graphql";
+const DEFAULT_GRAPHQL_ENDPOINT = "https://api.jira-plus-plus.in/graphql";
 
 function deriveBaseUrlFromGraphql(endpoint: string): string {
   try {
@@ -11,7 +11,7 @@ function deriveBaseUrlFromGraphql(endpoint: string): string {
     const normalized = url.toString();
     return normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
   } catch {
-    return "http://localhost:4000";
+    return "https://api.jira-plus-plus.in";
   }
 }
 

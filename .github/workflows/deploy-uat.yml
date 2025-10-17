@@ -1,0 +1,77 @@
+name: Deploy UAT
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+      - "specs/**"
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint web
+        run: pnpm -r --filter ./apps/web lint
+
+      - name: Typecheck web
+        run: pnpm -r --filter ./apps/web typecheck
+
+      - name: Lint api
+        run: pnpm -r --filter ./apps/api lint
+
+      - name: Typecheck api
+        run: pnpm -r --filter ./apps/api typecheck
+
+      - name: Test api
+        run: pnpm -r --filter ./apps/api test -- --runInBand
+
+      - name: Build web
+        run: pnpm -r --filter ./apps/web build
+
+      - name: Archive web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: apps/web/dist
+
+  deploy:
+    needs: build-and-test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: uat
+      url: https://ui.jira-plus-plus.internal
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy env file
+        run: |
+          echo "${{ secrets.UAT_ENV_FILE }}" | base64 --decode > infra/.env.uat
+
+      - name: Install SSH key
+        uses: webfactory/ssh-agent@v0.8.0
+        with:
+          ssh-private-key: ${{ secrets.UAT_SSH_KEY }}
+
+      - name: Deploy via SSH
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.UAT_SSH_USER }}@${{ secrets.UAT_SSH_HOST }} "cd ${{ secrets.UAT_DEPLOY_DIR }} && git fetch origin main && git reset --hard origin/main && chmod +x infra/deploy.sh && ./infra/deploy.sh infra/.env.uat"

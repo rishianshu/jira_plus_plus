@@ -21,6 +21,7 @@ for (const envPath of candidateEnvPaths) {
 
 const envSchema = z.object({
   PORT: z.coerce.number().default(4000),
+  WORKER_PORT: z.coerce.number().default(4001),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   JIRA_BASE_URL: z.string().min(1, "JIRA_BASE_URL is required"),
   JIRA_EMAIL: z.string().email(),

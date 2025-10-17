@@ -1,6 +1,6 @@
 import { ChangeEvent } from "react";
+import clsx from "clsx";
 import { RefreshCw } from "lucide-react";
-import { Button } from "../ui/button";
 
 interface ScrumHeaderProps {
   date: string;
@@ -14,8 +14,6 @@ interface ScrumHeaderProps {
   lastUpdated?: string | null;
   autoRefresh: boolean;
   onAutoRefreshChange: (value: boolean) => void;
-  onExport: (target: "PDF" | "SLACK") => void;
-  exporting?: boolean;
 }
 
 export function ScrumHeader({
@@ -30,8 +28,6 @@ export function ScrumHeader({
   lastUpdated,
   autoRefresh,
   onAutoRefreshChange,
-  onExport,
-  exporting = false,
 }: ScrumHeaderProps) {
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
     onDateChange(event.target.value);
@@ -80,27 +76,13 @@ export function ScrumHeader({
               className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm transition focus:outline-none focus:ring-2 focus:ring-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-slate-600"
             />
           </div>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={onRefresh}
-            disabled={isRefreshing || !projectId}
-          >
-            <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
-            {isRefreshing ? "Refreshing" : "Refresh"}
-          </Button>
-          <label className="flex items-center gap-2 rounded-full border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium uppercase tracking-wide text-slate-500 transition dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-slate-300 text-slate-600 focus:ring-slate-400 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
-              checked={autoRefresh}
-              onChange={(event) => onAutoRefreshChange(event.target.checked)}
-            />
-            Auto-refresh
-          </label>
-          <div className="relative">
-            <ExportMenu onExport={onExport} disabled={!projectId} busy={exporting} />
-          </div>
+          <RefreshControls
+            onRefresh={onRefresh}
+            disabled={!projectId}
+            isRefreshing={isRefreshing}
+            autoRefresh={autoRefresh}
+            onAutoRefreshChange={onAutoRefreshChange}
+          />
         </div>
       </div>
       {lastUpdated ? (
@@ -112,33 +94,43 @@ export function ScrumHeader({
   );
 }
 
-function ExportMenu({
-  onExport,
+function RefreshControls({
+  onRefresh,
   disabled,
-  busy,
+  isRefreshing,
+  autoRefresh,
+  onAutoRefreshChange,
 }: {
-  onExport: (target: "PDF" | "SLACK") => void;
+  onRefresh: () => void;
   disabled: boolean;
-  busy?: boolean;
+  isRefreshing: boolean;
+  autoRefresh: boolean;
+  onAutoRefreshChange: (value: boolean) => void;
 }) {
   return (
     <div className="inline-flex overflow-hidden rounded-full border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900/80">
       <button
         type="button"
-        className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-slate-500 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-300 dark:hover:bg-slate-800"
-        disabled={disabled || busy}
-        onClick={() => onExport("PDF")}
+        className="inline-flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-200 dark:hover:bg-slate-800"
+        onClick={onRefresh}
+        disabled={disabled || isRefreshing}
       >
-        Export PDF
+        <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+        {isRefreshing ? "Refreshing" : "Refresh"}
       </button>
       <span className="h-full w-px bg-slate-200 dark:bg-slate-700" aria-hidden />
       <button
         type="button"
-        className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-slate-500 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-300 dark:hover:bg-slate-800"
-        disabled={disabled || busy}
-        onClick={() => onExport("SLACK")}
+        className={clsx(
+          "px-3 py-2 text-xs font-semibold uppercase tracking-wide transition",
+          autoRefresh
+            ? "bg-slate-900 text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
+            : "text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800",
+        )}
+        onClick={() => onAutoRefreshChange(!autoRefresh)}
+        aria-pressed={autoRefresh}
       >
-        Send Slack
+        {autoRefresh ? "Auto On" : "Auto Off"}
       </button>
     </div>
   );

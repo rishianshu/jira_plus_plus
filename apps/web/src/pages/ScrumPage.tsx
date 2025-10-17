@@ -120,16 +120,6 @@ const REGENERATE_SUMMARY_MUTATION = gql`
   }
 `;
 
-const EXPORT_SUMMARIES_MUTATION = gql`
-  mutation ExportDailySummaries($date: Date!, $projectId: ID!, $target: SummaryExportTarget!) {
-    exportDailySummaries(date: $date, projectId: $projectId, target: $target) {
-      success
-      message
-      location
-    }
-  }
-`;
-
 interface ToastState {
   type: "success" | "error";
   message: string;
@@ -301,7 +291,6 @@ export function ScrumPage() {
   }, [toast]);
 
   const [regenerateSummary, { loading: regenerating }] = useMutation(REGENERATE_SUMMARY_MUTATION);
-  const [exportSummaries, { loading: exporting }] = useMutation(EXPORT_SUMMARIES_MUTATION);
 
   const handleDateChange = (value: string) => {
     setSelectedDate(value);
@@ -350,25 +339,6 @@ export function ScrumPage() {
     }
   };
 
-  const handleExport = async (target: "PDF" | "SLACK") => {
-    if (!selectedProjectId) {
-      return;
-    }
-    try {
-      const result = await exportSummaries({
-        variables: { date: selectedDate, target, projectId: selectedProjectId },
-      });
-      const payload = result.data?.exportDailySummaries;
-      if (payload?.success) {
-        setToast({ type: "success", message: payload.message });
-      } else {
-        setToast({ type: "error", message: "Export failed" });
-      }
-    } catch (exportError) {
-      setToast({ type: "error", message: friendlyError(exportError) });
-    }
-  };
-
   const handleAction = (payload: InlineActionPayload) => {
     setActionModal(payload);
   };
@@ -384,7 +354,7 @@ export function ScrumPage() {
   };
 
   return (
-    <div className="-mx-6 space-y-6 px-4 sm:-mx-8 sm:px-6 lg:-mx-12 lg:px-10 xl:-mx-16 xl:px-14">
+    <div className="space-y-6 px-4 sm:px-6 lg:px-10 xl:px-16">
       <section className="space-y-6">
         <ScrumHeader
           date={selectedDate}
@@ -398,8 +368,6 @@ export function ScrumPage() {
           lastUpdated={lastUpdated}
           autoRefresh={autoRefresh}
           onAutoRefreshChange={setAutoRefresh}
-          onExport={handleExport}
-          exporting={exporting}
         />
 
         <TeamMetricsBar

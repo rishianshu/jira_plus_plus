@@ -5,7 +5,7 @@ export const TOKEN_STORAGE_KEY = "jira-plus-plus/token";
 
 function createApolloClient() {
   const httpLink = new HttpLink({
-    uri: import.meta.env.VITE_GRAPHQL_ENDPOINT ?? "http://localhost:4000/graphql",
+    uri: import.meta.env.VITE_GRAPHQL_ENDPOINT ?? "https://api.jira-plus-plus.in/graphql",
   });
 
   const authLink = setContext((_, { headers }) => {

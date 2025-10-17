@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1
+
+FROM node:20-alpine AS base
+WORKDIR /app
+RUN corepack enable && corepack prepare pnpm@8.15.3 --activate
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/api/package.json apps/api/package.json
+COPY apps/api/tsconfig.json apps/api/tsconfig.json
+COPY apps/api/prisma apps/api/prisma
+COPY tsconfig.base.json ./
+
+RUN pnpm install --frozen-lockfile --filter @jira-plus-plus/api... \
+  && pnpm --filter @jira-plus-plus/api prisma generate --schema prisma/schema.prisma
+
+FROM base AS build
+COPY apps/api apps/api
+RUN pnpm --filter @jira-plus-plus/api build
+
+FROM node:20-bullseye-slim AS runtime
+WORKDIR /app
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends curl openssl ca-certificates python3 build-essential \
+  && rm -rf /var/lib/apt/lists/*
+RUN corepack enable && corepack prepare pnpm@8.15.3 --activate
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/api/package.json apps/api/package.json
+COPY apps/api/prisma apps/api/prisma
+RUN pnpm install --frozen-lockfile --filter @jira-plus-plus/api...
+RUN pnpm --filter @jira-plus-plus/api prisma generate --schema prisma/schema.prisma
+ENV NODE_ENV=production
+COPY --from=build /app/apps/api/dist /app/apps/api/dist
+
+EXPOSE 4001
+CMD ["node", "apps/api/dist/temporal/worker.js"]
