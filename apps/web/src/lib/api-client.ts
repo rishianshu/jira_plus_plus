@@ -1,4 +1,9 @@
-const DEFAULT_GRAPHQL_ENDPOINT = "https://api.jira-plus-plus.in/graphql";
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+
+const DEFAULT_GRAPHQL_ENDPOINT =
+  typeof window !== "undefined" && LOCAL_HOSTS.has(window.location.hostname)
+    ? "http://localhost:4000/graphql"
+    : "https://api.jira-plus-plus.in/graphql";
 
 function deriveBaseUrlFromGraphql(endpoint: string): string {
   try {
@@ -11,7 +16,9 @@ function deriveBaseUrlFromGraphql(endpoint: string): string {
     const normalized = url.toString();
     return normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
   } catch {
-    return "https://api.jira-plus-plus.in";
+    return LOCAL_HOSTS.has(typeof window !== "undefined" ? window.location.hostname : "")
+      ? "http://localhost:4000"
+      : "https://api.jira-plus-plus.in";
   }
 }
 
