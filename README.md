@@ -49,6 +49,11 @@ Bootstrapped development workspace for the Jira++ platform described in `specs/`
    - Admin console reachable at `http://localhost:3000/admin`
      - Use `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env` (update to secure values before booting)
 
+### Additional Notes
+
+- See [docs/development/setup.md](docs/development/setup.md) for environment details,
+  verification scripts, and Git hooks.
+
 ## Tooling
 - **Linting** – `pnpm lint`
 - **Type checking** – `pnpm typecheck`
