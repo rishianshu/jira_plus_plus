@@ -1418,6 +1418,7 @@ function ProjectUsersModal({
 }) {
   const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
   const [loadOptions, { data: optionsData, loading: optionsLoading, error: optionsError }] =
     useLazyQuery<ProjectUserOptionsData>(PROJECT_USERS_OPTIONS_QUERY);
   const { data: trackedData, loading: trackedLoading, refetch: refetchTracked } = useQuery<TrackedUsersData>(
@@ -1439,6 +1440,7 @@ function ProjectUsersModal({
   useEffect(() => {
     if (!open) {
       setSelectedAccounts(new Set());
+      setSearchTerm("");
       return;
     }
     const tracked = trackedData?.projectTrackedUsers ?? [];
@@ -1482,6 +1484,19 @@ function ProjectUsersModal({
       a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" }),
     );
   }, [suggestions, trackedUsers]);
+
+  const filteredUsers = useMemo(() => {
+    if (!searchTerm.trim()) {
+      return combined;
+    }
+    const term = searchTerm.trim().toLowerCase();
+    return combined.filter((user) => {
+      const haystack = [user.displayName, user.email ?? "", user.accountId]
+        .join("\n")
+        .toLowerCase();
+      return haystack.includes(term);
+    });
+  }, [combined, searchTerm]);
 
   const toggleAccount = (accountId: string) => {
     setSelectedAccounts((prev) => {
@@ -1556,35 +1571,54 @@ function ProjectUsersModal({
             <p>Select a project to manage tracked Jira users.</p>
           )}
         </div>
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-xs text-slate-500 dark:text-slate-400">
             Jira data refreshes live from your site. Accounts toggled on are eligible for boards and
             analytics.
           </p>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              if (project) {
-                void loadOptions({ variables: { siteId: project.siteId, projectKey: project.projectKey }, fetchPolicy: "network-only" });
-              }
-            }}
-          >
-            Refresh from Jira
-          </Button>
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+            <input
+              type="search"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder="Search Jira users…"
+              className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:border-slate-400 dark:focus:ring-slate-700"
+            />
+            <div className="flex items-center gap-2">
+              {searchTerm ? (
+                <Button type="button" variant="ghost" size="sm" onClick={() => setSearchTerm("")}>
+                  Clear
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (project) {
+                    void loadOptions({
+                      variables: { siteId: project.siteId, projectKey: project.projectKey },
+                      fetchPolicy: "network-only",
+                    });
+                  }
+                }}
+              >
+                Refresh
+              </Button>
+            </div>
+          </div>
         </div>
         <div className="max-h-80 overflow-y-auto rounded-2xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
           {optionsLoading || trackedLoading ? (
             <p className="p-4 text-sm text-slate-500 dark:text-slate-400">Loading Jira users…</p>
-          ) : combined.length === 0 ? (
+          ) : filteredUsers.length === 0 ? (
             <p className="p-4 text-sm text-slate-500 dark:text-slate-400">
               No assignable users were returned for this project. Ensure the Jira API token has access to
               view members.
             </p>
           ) : (
             <ul className="divide-y divide-slate-200 text-sm dark:divide-slate-800">
-              {combined.map((user) => {
+              {filteredUsers.map((user) => {
                 const checked = selectedAccounts.has(user.accountId);
                 return (
                   <li key={user.accountId} className="flex items-center gap-4 px-4 py-3">

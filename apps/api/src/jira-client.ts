@@ -99,42 +99,58 @@ export async function fetchJiraProjectUsers(
 ): Promise<JiraUserOption[]> {
   const { site, token } = await resolveSiteAuth(prisma, siteId);
 
-  const url = new URL(
-    `${site.baseUrl.replace(/\/$/, "")}/rest/api/3/user/assignable/search`,
-  );
-  url.searchParams.set("project", projectKey);
-  url.searchParams.set("maxResults", "200");
+  const baseUrl = new URL(`${site.baseUrl.replace(/\/$/, "")}/rest/api/3/user/assignable/search`);
+  baseUrl.searchParams.set("project", projectKey);
 
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      headers: buildAuthHeaders(site.adminEmail, token),
-    });
-  } catch (error) {
-    throw new GraphQLError("Unable to reach the Jira API. Check network connectivity.", {
-      extensions: { code: "BAD_GATEWAY" },
-    });
+  const maxResults = 200;
+  let startAt = 0;
+  const users: JiraUserOption[] = [];
+
+  while (true) {
+    const pageUrl = new URL(baseUrl);
+    pageUrl.searchParams.set("maxResults", String(maxResults));
+    pageUrl.searchParams.set("startAt", String(startAt));
+
+    let response: Response;
+    try {
+      response = await fetch(pageUrl, {
+        headers: buildAuthHeaders(site.adminEmail, token),
+      });
+    } catch {
+      throw new GraphQLError("Unable to reach the Jira API. Check network connectivity.", {
+        extensions: { code: "BAD_GATEWAY" },
+      });
+    }
+
+    if (!response.ok) {
+      throw new GraphQLError("Failed to fetch Jira users. Ensure the API token has read permissions.", {
+        extensions: { code: "BAD_REQUEST" },
+      });
+    }
+
+    const page = (await response.json()) as Array<{
+      accountId: string;
+      displayName: string;
+      emailAddress?: string;
+      avatarUrls?: Record<string, string>;
+    }>;
+
+    for (const user of page) {
+      users.push({
+        accountId: user.accountId,
+        displayName: user.displayName,
+        email: user.emailAddress ?? null,
+        avatarUrl: user.avatarUrls?.["48x48"] ?? user.avatarUrls?.["24x24"] ?? null,
+      });
+    }
+
+    if (page.length < maxResults) {
+      break;
+    }
+    startAt += maxResults;
   }
 
-  if (!response.ok) {
-    throw new GraphQLError("Failed to fetch Jira users. Ensure the API token has read permissions.", {
-      extensions: { code: "BAD_REQUEST" },
-    });
-  }
-
-  const data = (await response.json()) as Array<{
-    accountId: string;
-    displayName: string;
-    emailAddress?: string;
-    avatarUrls?: Record<string, string>;
-  }>;
-
-  return data.map((user) => ({
-    accountId: user.accountId,
-    displayName: user.displayName,
-    email: user.emailAddress ?? null,
-    avatarUrl: user.avatarUrls?.["48x48"] ?? user.avatarUrls?.["24x24"] ?? null,
-  }));
+  return users;
 }
 
 export interface JiraIssueSearchResponse {

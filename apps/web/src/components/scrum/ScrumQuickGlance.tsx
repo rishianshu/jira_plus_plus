@@ -57,7 +57,7 @@ export function ScrumQuickGlance({ summaries, selectedId, onSelect }: ScrumQuick
                     {displayName}
                   </p>
                   <p className="truncate text-[11px] text-slate-500 dark:text-slate-400">
-                    {summary.project?.key ?? 'Project'} · {summary.project?.name ?? 'Unknown'}
+                    {/* {summary.project?.key ?? 'Project'} · {summary.project?.name ?? 'Unknown'} */}
                   </p>
                 </div>
                 <div>
