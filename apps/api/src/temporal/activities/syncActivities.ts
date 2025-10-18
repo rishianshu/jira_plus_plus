@@ -1,14 +1,16 @@
 import { DateTime } from "luxon";
-import pRetry from "p-retry";
+import pRetry, { AbortError } from "p-retry";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "../../prisma.js";
 import {
   resolveSiteAuth,
   searchJiraIssues,
   fetchJiraIssueDetail,
+  JiraClientError,
 } from "../../jira-client.js";
 import type { SyncCursor } from "../workflows/syncProjectWorkflow.js";
 import { getEnv } from "../../env.js";
+import { recordSyncFailure, recordSyncSuccess } from "../../services/telemetry/syncTelemetryService.js";
 
 const ENTITY_KEYS = ["issue", "comment", "worklog"] as const;
 
@@ -179,18 +181,51 @@ export async function syncIssuesBatch(args: SyncIssuesBatchArgs): Promise<SyncIs
     jql += ` AND updated >= "${formatted}"`;
   }
 
-  const searchResponse = await pRetry(
-    () =>
-      searchJiraIssues({
-        baseUrl: args.baseUrl,
-        adminEmail: args.adminEmail,
-        token: args.token,
-        jql,
-        nextPageToken: args.cursor.nextPageToken ?? undefined,
-        maxResults: 100,
-      }),
-    { retries: 3 },
-  );
+  let searchResponse;
+  try {
+    searchResponse = await pRetry(
+      async () => {
+        try {
+          return await searchJiraIssues({
+            baseUrl: args.baseUrl,
+            adminEmail: args.adminEmail,
+            token: args.token,
+            jql,
+            nextPageToken: args.cursor.nextPageToken ?? undefined,
+            maxResults: 100,
+          });
+        } catch (error) {
+          if (error instanceof JiraClientError && !error.classification.retryable) {
+            throw new AbortError(error);
+          }
+          throw error;
+        }
+      },
+      { retries: 3 },
+    );
+  } catch (error) {
+    if (error instanceof AbortError) {
+      const originalError = (error as AbortError & { originalError?: unknown }).originalError;
+      if (originalError instanceof JiraClientError) {
+        await recordSyncFailure({
+          projectId: args.projectId,
+          classification: originalError.classification,
+          message: originalError.message,
+          metadata: { stage: "searchIssues" },
+        });
+        throw originalError;
+      }
+    }
+    if (error instanceof JiraClientError) {
+      await recordSyncFailure({
+        projectId: args.projectId,
+        classification: error.classification,
+        message: error.message,
+        metadata: { stage: "searchIssues" },
+      });
+    }
+    throw error;
+  }
 
   if (!searchResponse.issues.length) {
     return {
@@ -204,16 +239,49 @@ export async function syncIssuesBatch(args: SyncIssuesBatchArgs): Promise<SyncIs
   let processedCount = 0;
 
   for (const issueSummary of searchResponse.issues) {
-    const detail = await pRetry(
-      () =>
-        fetchJiraIssueDetail({
-          baseUrl: args.baseUrl,
-          adminEmail: args.adminEmail,
-          token: args.token,
-          issueIdOrKey: issueSummary.key,
-        }),
-      { retries: 3 },
-    );
+    let detail: any;
+    try {
+      detail = await pRetry(
+        async () => {
+          try {
+            return await fetchJiraIssueDetail({
+              baseUrl: args.baseUrl,
+              adminEmail: args.adminEmail,
+              token: args.token,
+              issueIdOrKey: issueSummary.key,
+            });
+          } catch (error) {
+            if (error instanceof JiraClientError && !error.classification.retryable) {
+              throw new AbortError(error);
+            }
+            throw error;
+          }
+        },
+        { retries: 3 },
+      );
+    } catch (error) {
+      if (error instanceof AbortError) {
+        const original = (error as AbortError & { originalError?: unknown }).originalError;
+        if (original instanceof JiraClientError) {
+          await recordSyncFailure({
+            projectId: args.projectId,
+            classification: original.classification,
+            message: original.message,
+            metadata: { stage: "issueDetail", issueKey: issueSummary.key },
+          });
+          throw original;
+        }
+      }
+      if (error instanceof JiraClientError) {
+        await recordSyncFailure({
+          projectId: args.projectId,
+          classification: error.classification,
+          message: error.message,
+          metadata: { stage: "issueDetail", issueKey: issueSummary.key },
+        });
+      }
+      throw error;
+    }
 
     await upsertIssueFromDetail(args.projectId, detail);
     processedCount += 1;
@@ -254,6 +322,10 @@ export async function finalizeProjectSync(args: {
   details?: Record<string, unknown>;
 }): Promise<void> {
   const lastSyncTime = args.lastUpdatedAt ? new Date(args.lastUpdatedAt) : undefined;
+
+  if (args.status === "SUCCESS") {
+    await recordSyncSuccess(args.projectId);
+  }
 
   await prisma.syncState.updateMany({
     where: { projectId: args.projectId, entity: { in: ENTITY_KEYS as unknown as string[] } },

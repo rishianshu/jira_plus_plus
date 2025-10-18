@@ -109,6 +109,14 @@ enum SyncStatus {
 | **Prisma ORM** | Handles model definitions and upserts for issues, comments, worklogs, Jira users, sprints |
 | **GraphQL Server** | Exposes unified read + admin control APIs |
 | **Config Loader** | Reads Jira credentials, Temporal connection, and sync intervals |
+| **Communication Service** | Generic channel abstraction (email, WhatsApp, Slack) used for sync alerts, billing notices, and other ops signals |
+| **Error Classification Helper** | Normalizes Jira/HTTP/network failures into canonical codes & guidance strings consumed by workflows, telemetry, and UI |
+
+### Communication Service Requirements
+- Provide a reusable mailer that accepts `to`, `cc`, `bcc`, `subject`, `text`, `html`, and `from` overrides. Must support rich HTML bodies with inline styles and attachments (future).
+- Expose a channel-agnostic API: `sendMessage({ channel: 'email' | 'whatsapp' | 'slack', payload })`.
+- Channel adapters implement the shared contract; only the email adapter is mandatory for v1, using SMTP or provider API.
+- Error handling within adapters should bubble structured failure reasons back to telemetry so repeated notification failures can be surfaced.
 
 ---
 
@@ -130,11 +138,22 @@ Supporting queries:
 
 ---
 
-## Error Handling & Logging
-- Retry failed requests with `p-retry` (three attempts per Jira call).
-- Workflow failures funnel into `SyncLog` with level `ERROR` and mark `SyncState` + `SyncJob` as `FAILED`/`ERROR`.
-- Gracefully handle expired tokens or Jira downtime; admins can resume after correcting secrets.
+## Error Handling, Telemetry & Alerting
+- Retry failed requests with `p-retry` (three attempts per Jira call). Attach structured metadata (`errorCode`, `errorMessage`) returned by Jira so downstream helpers can classify the root cause.
+- Introduce a dedicated **Jira error classifier** helper that inspects HTTP status, Atlassian error codes, and network failures to label events (`SUSPENDED_PAYMENT`, `RATE_LIMIT`, `NETWORK_GLITCH`, etc.). This module lives alongside the Jira client and is reused by activities, telemetry analysers, and UI health endpoints.
+- Workflow failures funnel into `SyncLog` with level `ERROR` and mark `SyncState` + `SyncJob` as `FAILED`/`ERROR`. `SyncLog.details` must include the classified error code.
+- Gracefully handle expired tokens or Jira downtime; admins can resume after correcting secrets. Classification helper should emit actionable advice (e.g., re-authenticate vs. contact billing).
+- Telemetry collector consumes Temporal workflow history and sync logs to detect repeated failures with the same classification (e.g., ≥3 consecutive `SUSPENDED_PAYMENT`). When thresholds are crossed the telemetry layer instructs the scheduler to apply exponential back-off and raises an alert via the communication module.
 - Detect schema changes in Jira API and flag mismatches in logs for operator review.
+
+### Telemetry-driven Scheduling
+- Temporal itself remains the source of truth for scheduling. Rather than allowing API calls to mutate cron expressions directly, a telemetry processor (worker task) analyses Temporal histories and SyncLog entries to determine when to slow down or restore schedules.
+- Back-off strategy: maintain original cron + a ladder of longer intervals. Telemetry requests an updated cadence when repeated failures are observed; it also restores the original interval after the first successful run.
+- The processor also watches for prolonged "slow response" scenarios (high latency without outright failure) to optionally stagger future runs or open an ops ticket (future enhancement).
+
+### Communication Module
+- Alerts ride through a pluggable communication service that supports multiple channels (initially email, extensible to WhatsApp/SMS, Slack). Each channel exposes a consistent interface: `send({ to, subject, text, html, channelSpecificMetadata })`.
+- Alert payloads produced by telemetry send a structured message (project id, site alias, error category, suggested action) to the communication module, which fans out to configured channels based on policy (e.g., billing alerts → email + WhatsApp, latency alerts → Slack).
 
 ---
 
@@ -177,3 +196,6 @@ Supporting queries:
 - Add multi-tenant support for multiple Jira instances.
 - Backfill sprint data with full pagination (beyond first page in `worklog`/`comment`).
 - Surface ingestion metrics (throughput, last error code) in admin console dashboards.
+- Expand telemetry insights to detect slow-but-successful syncs and automatically open ops alerts.
+- Add WhatsApp/Slack adapters to the communication service for multi-channel escalation.
+- Monitor workflow histories for success streaks to automatically clear back-off without operator involvement even if alerts were not acknowledged.

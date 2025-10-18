@@ -298,7 +298,7 @@ export function PerformanceReviewView() {
     fetchPolicy: "cache-first",
   });
 
-  const projects = projectsData?.scrumProjects ?? [];
+  const projects = useMemo(() => projectsData?.scrumProjects ?? [], [projectsData]);
 
   useEffect(() => {
     if (!projects.length) {
@@ -323,7 +323,7 @@ export function PerformanceReviewView() {
     void loadTrackedUsers({ variables: { projectId: selectedProjectId } });
   }, [selectedProjectId, loadTrackedUsers]);
 
-  const trackedUsers = trackedData?.projectTrackedUsers ?? [];
+  const trackedUsers = useMemo(() => trackedData?.projectTrackedUsers ?? [], [trackedData]);
 
   useEffect(() => {
     if (!trackedUsers.length) {

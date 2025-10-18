@@ -36,6 +36,15 @@ const envSchema = z.object({
   TEMPORAL_NAMESPACE: z.string().default("default"),
   TEMPORAL_TASK_QUEUE: z.string().default("jira-sync"),
   SYNC_DEFAULT_CRON: z.string().default("*/15 * * * *"),
+  OPS_ALERT_EMAILS: z.string().optional(),
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().optional(),
+  SMTP_USERNAME: z.string().optional(),
+  SMTP_PASSWORD: z.string().optional(),
+  SMTP_SECURE: z
+    .union([z.literal("true"), z.literal("false")])
+    .optional(),
+  SMTP_FROM_EMAIL: z.string().email().optional(),
 });
 
 type EnvShape = z.infer<typeof envSchema>;

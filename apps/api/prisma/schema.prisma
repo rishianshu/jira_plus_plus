@@ -212,6 +212,9 @@ model SyncJob {
   workflowId   String        @unique
   scheduleId   String        @unique
   cronSchedule String
+  backoffLevel Int           @default(0)
+  backoffOriginalCron String?
+  backoffLastNotifiedAt DateTime?
   status       SyncJobStatus @default(ACTIVE)
   lastRunAt    DateTime?
   nextRunAt    DateTime?

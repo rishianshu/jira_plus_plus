@@ -52,7 +52,7 @@ Bootstrapped development workspace for the Jira++ platform described in `specs/`
 ### Additional Notes
 
 - See [docs/development/setup.md](docs/development/setup.md) for environment details,
-  verification scripts, and Git hooks.
+  verification scripts, and Git hooks (`pnpm hooks`).
 
 ## Tooling
 - **Linting** – `pnpm lint`

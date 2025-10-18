@@ -204,7 +204,7 @@ export function ManagerSummaryView() {
     fetchPolicy: "cache-first",
   });
 
-  const projects = projectsData?.scrumProjects ?? [];
+  const projects = useMemo(() => projectsData?.scrumProjects ?? [], [projectsData]);
 
   useEffect(() => {
     if (!projects.length) {
@@ -227,7 +227,7 @@ export function ManagerSummaryView() {
     fetchPolicy: "cache-and-network",
   });
 
-  const sprints = sprintsData?.projectSprints ?? [];
+  const sprints = useMemo(() => sprintsData?.projectSprints ?? [], [sprintsData]);
 
   useEffect(() => {
     if (!selectedProjectId) {

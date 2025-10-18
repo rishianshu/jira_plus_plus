@@ -10,6 +10,12 @@
     "typecheck": "pnpm -r --filter './apps/*' typecheck",
     "format": "pnpm -r --filter './apps/*' format",
     "test": "pnpm -r --filter './apps/*' test",
-    "verify": "bash scripts/verify.sh"
+    "verify": "bash scripts/verify.sh",
+    "hooks": "bash scripts/setup-hooks.sh",
+    "e2e:run": "cypress run --config-file cypress.config.ts",
+    "e2e:open": "cypress open --config-file cypress.config.ts"
+  },
+  "devDependencies": {
+    "cypress": "^13.13.1"
   }
 }

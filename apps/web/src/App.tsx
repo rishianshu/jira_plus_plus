@@ -24,16 +24,24 @@ export default function App() {
 
 function Shell() {
   const { user } = useAuth();
-  const navigationItems = useMemo(
-    () => [
+  const navigationItems = useMemo(() => {
+    if (!user) {
+      return [{ to: "/", label: "Home" }];
+    }
+
+    const items = [
       { to: "/", label: "Home" },
       { to: "/scrum", label: "Daily Scrum" },
       { to: "/focus", label: "Developer Focus" },
       { to: "/manager", label: "Manager Summary" },
-      ...(user?.role === "ADMIN" ? [{ to: "/admin", label: "Admin Console" }] : []),
-    ],
-    [user?.role],
-  );
+    ];
+
+    if (user.role === "ADMIN") {
+      items.push({ to: "/admin", label: "Admin Console" });
+    }
+
+    return items;
+  }, [user]);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors dark:bg-slate-950 dark:text-slate-50">
@@ -69,9 +77,30 @@ function Shell() {
         </nav>
         <Routes>
           <Route path="/" element={<HomePage />} />
-          <Route path="/scrum" element={<ScrumPage />} />
-          <Route path="/focus" element={<FocusPage />} />
-          <Route path="/manager" element={<ManagerPage />} />
+          <Route
+            path="/scrum"
+            element={
+              <RequireAuth>
+                <ScrumPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/focus"
+            element={
+              <RequireAuth>
+                <FocusPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/manager"
+            element={
+              <RequireAuth>
+                <ManagerPage />
+              </RequireAuth>
+            }
+          />
           <Route
             path="/admin"
             element={
@@ -102,6 +131,14 @@ function RequireAdmin({ children }: { children: JSX.Element }) {
     return <Navigate to="/" replace />;
   }
   if (user.role !== "ADMIN") {
+    return <Navigate to="/" replace />;
+  }
+  return children;
+}
+
+function RequireAuth({ children }: { children: JSX.Element }) {
+  const { user } = useAuth();
+  if (!user) {
     return <Navigate to="/" replace />;
   }
   return children;

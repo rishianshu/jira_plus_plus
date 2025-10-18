@@ -153,7 +153,10 @@ export function ScrumPage() {
     fetchPolicy: "cache-first",
   });
 
-  const projects = projectsData?.scrumProjects ?? [];
+  const projects = useMemo(
+    () => projectsData?.scrumProjects ?? [],
+    [projectsData?.scrumProjects],
+  );
 
   useEffect(() => {
     if (!projects.length) {
@@ -181,7 +184,10 @@ export function ScrumPage() {
     fetchPolicy: "cache-and-network",
   });
 
-  const summaries = summariesData?.dailySummaries ?? [];
+  const summaries = useMemo(
+    () => summariesData?.dailySummaries ?? [],
+    [summariesData?.dailySummaries],
+  );
 
   useEffect(() => {
     if (!autoRefresh || !selectedProjectId) {
