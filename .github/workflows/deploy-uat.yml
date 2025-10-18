@@ -10,9 +10,6 @@ on:
       - "specs/**"
   workflow_dispatch:
 
-env:
-  SKIP_UAT_DEPLOY: ${{ secrets.SKIP_UAT_DEPLOY || 'false' }}
-
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -58,7 +55,7 @@ jobs:
 
   deploy:
     needs: build-and-test
-    if: github.ref == 'refs/heads/main' && env.SKIP_UAT_DEPLOY != 'true'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: uat
