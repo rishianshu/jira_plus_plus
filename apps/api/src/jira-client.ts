@@ -1,6 +1,7 @@
 import { GraphQLError } from "graphql";
 import type { PrismaClient, JiraSite } from "@prisma/client";
 import { decryptSecret } from "./auth.js";
+import { classifyJiraError, type JiraErrorClassification } from "./jira/errorClassifier.js";
 
 export interface JiraSiteAuth {
   site: JiraSite;
@@ -96,7 +97,25 @@ export async function fetchJiraProjectUsers(
   prisma: PrismaClient,
   siteId: string,
   projectKey: string,
+  options: { forceRefresh?: boolean } = {},
 ): Promise<JiraUserOption[]> {
+  const normalizedKey = projectKey;
+
+  if (!options.forceRefresh) {
+    const cached = await prisma.jiraAssignableUser.findMany({
+      where: { siteId, projectKey: normalizedKey },
+      orderBy: [{ displayName: "asc" as const }, { accountId: "asc" as const }],
+    });
+    if (cached.length) {
+      return cached.map((user) => ({
+        accountId: user.accountId,
+        displayName: user.displayName ?? user.accountId,
+        email: user.email ?? null,
+        avatarUrl: user.avatarUrl ?? null,
+      }));
+    }
+  }
+
   const { site, token } = await resolveSiteAuth(prisma, siteId);
 
   const baseUrl = new URL(`${site.baseUrl.replace(/\/$/, "")}/rest/api/3/user/assignable/search`);
@@ -106,7 +125,7 @@ export async function fetchJiraProjectUsers(
   let startAt = 0;
   const users: JiraUserOption[] = [];
 
-  while (true) {
+  for (;;) {
     const pageUrl = new URL(baseUrl);
     pageUrl.searchParams.set("maxResults", String(maxResults));
     pageUrl.searchParams.set("startAt", String(startAt));
@@ -150,7 +169,52 @@ export async function fetchJiraProjectUsers(
     startAt += maxResults;
   }
 
-  return users;
+  const accountIds = users.map((user) => user.accountId);
+
+  await prisma.$transaction(async (tx) => {
+    if (accountIds.length === 0) {
+      await tx.jiraAssignableUser.deleteMany({ where: { siteId, projectKey: normalizedKey } });
+      return;
+    }
+
+    await tx.jiraAssignableUser.deleteMany({
+      where: {
+        siteId,
+        projectKey: normalizedKey,
+        accountId: { notIn: accountIds },
+      },
+    });
+
+    await Promise.all(
+      users.map((user) =>
+        tx.jiraAssignableUser.upsert({
+          where: {
+            siteId_projectKey_accountId: {
+              siteId,
+              projectKey: normalizedKey,
+              accountId: user.accountId,
+            },
+          },
+          update: {
+            displayName: user.displayName ?? null,
+            email: user.email ?? null,
+            avatarUrl: user.avatarUrl ?? null,
+            fetchedAt: new Date(),
+          },
+          create: {
+            siteId,
+            projectKey: normalizedKey,
+            accountId: user.accountId,
+            displayName: user.displayName ?? null,
+            email: user.email ?? null,
+            avatarUrl: user.avatarUrl ?? null,
+          },
+        }),
+      ),
+    );
+  });
+
+  return users.sort((a, b) => (a.displayName ?? a.accountId).localeCompare(b.displayName ?? b.accountId));
 }
 
 export interface JiraIssueSearchResponse {
@@ -177,60 +241,111 @@ export interface JiraIssueSearchResponse {
   maxResults: number;
 }
 
-export async function searchJiraIssues(params: {
+export class JiraClientError extends Error {
+  classification: JiraErrorClassification;
+
+  constructor(classification: JiraErrorClassification, message?: string) {
+    super(message ?? classification.message);
+    this.name = "JiraClientError";
+    this.classification = classification;
+  }
+}
+
+interface JiraRequestParams {
   baseUrl: string;
   adminEmail: string;
   token: string;
+}
+
+function buildUrl(baseUrl: string, path: string): string {
+  return `${baseUrl.replace(/\/$/, "")}${path}`;
+}
+
+async function performJiraRequest(
+  url: string,
+  init: RequestInit,
+): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    const classification = classifyJiraError(
+      null,
+      {
+        errorMessage: error instanceof Error ? error.message : "Network error contacting Jira",
+      },
+      "Network error contacting Jira",
+    );
+    throw new JiraClientError(classification);
+  }
+}
+
+async function parseJson<T>(response: Response): Promise<T | null> {
+  const text = await response.text();
+  if (!text) {
+    return null;
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
+export async function searchJiraIssues(params: JiraRequestParams & {
   jql: string;
   nextPageToken?: string;
   maxResults?: number;
 }): Promise<JiraIssueSearchResponse> {
-  const url = `${params.baseUrl.replace(/\/$/, "")}/rest/api/3/search/jql`;
+  const url = buildUrl(params.baseUrl, "/rest/api/3/search/jql");
   const payload = {
-    method: 'POST',
+    method: "POST",
     headers: buildAuthHeaders(params.adminEmail, params.token),
     body: JSON.stringify({
       jql: params.jql,
       nextPageToken: params.nextPageToken,
       maxResults: params.maxResults ?? 100,
-      fields: ['summary', 'status', 'priority', 'assignee', 'updated', 'created'],
+      fields: ["summary", "status", "priority", "assignee", "updated", "created"],
     }),
   };
-  console.log(url, params);
-  const response = await fetch(url, payload);
-
-  
+  const response = await performJiraRequest(url, payload);
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(`Jira search failed (${response.status}): ${message}`);
+    const body = await parseJson<{ errorCode?: string; errorMessage?: string }>(response);
+    const classification = classifyJiraError(
+      response.status,
+      body,
+      response.statusText || "Jira search failed",
+    );
+    throw new JiraClientError(classification);
   }
 
   const data = (await response.json()) as JiraIssueSearchResponse;
   return data;
 }
 
-export async function fetchJiraIssueDetail(params: {
-  baseUrl: string;
-  adminEmail: string;
-  token: string;
+export async function fetchJiraIssueDetail(params: JiraRequestParams & {
   issueIdOrKey: string;
   includeComments?: boolean;
   includeWorklogs?: boolean;
 }): Promise<any> {
   const issueUrl = new URL(
-    `${params.baseUrl.replace(/\/$/, "")}/rest/api/3/issue/${encodeURIComponent(params.issueIdOrKey)}`,
+    buildUrl(params.baseUrl, `/rest/api/3/issue/${encodeURIComponent(params.issueIdOrKey)}`),
   );
   issueUrl.searchParams.set("expand", "renderedFields,comment,changelog");
   issueUrl.searchParams.set("fields", "summary,status,priority,assignee,updated,created");
 
-  const issueResponse = await fetch(issueUrl, {
+  const issueResponse = await performJiraRequest(issueUrl.toString(), {
     headers: buildAuthHeaders(params.adminEmail, params.token),
   });
 
   if (!issueResponse.ok) {
-    const message = await issueResponse.text();
-    throw new Error(`Failed to fetch issue details (${issueResponse.status}): ${message}`);
+    const body = await parseJson<{ errorCode?: string; errorMessage?: string }>(issueResponse);
+    const classification = classifyJiraError(
+      issueResponse.status,
+      body,
+      issueResponse.statusText || "Failed to fetch issue details",
+    );
+    throw new JiraClientError(classification);
   }
 
   const detail = (await issueResponse.json()) as any;
@@ -282,13 +397,18 @@ export async function fetchJiraIssueComments(params: {
     url.searchParams.set("maxResults", "100");
     url.searchParams.set("expand", "renderedBody");
 
-    const response = await fetch(url, {
+    const response = await performJiraRequest(url.toString(), {
       headers: buildAuthHeaders(params.adminEmail, params.token),
     });
 
     if (!response.ok) {
-      const message = await response.text();
-      throw new Error(`Failed to fetch comments (${response.status}): ${message}`);
+      const body = await parseJson<{ errorCode?: string; errorMessage?: string }>(response);
+      const classification = classifyJiraError(
+        response.status,
+        body,
+        response.statusText || "Failed to fetch comments",
+      );
+      throw new JiraClientError(classification);
     }
 
     const data = (await response.json()) as {
@@ -331,13 +451,18 @@ export async function fetchJiraIssueWorklogs(params: {
     url.searchParams.set("startAt", String(startAt));
     url.searchParams.set("maxResults", "100");
 
-    const response = await fetch(url, {
+    const response = await performJiraRequest(url.toString(), {
       headers: buildAuthHeaders(params.adminEmail, params.token),
     });
 
     if (!response.ok) {
-      const message = await response.text();
-      throw new Error(`Failed to fetch worklogs (${response.status}): ${message}`);
+      const body = await parseJson<{ errorCode?: string; errorMessage?: string }>(response);
+      const classification = classifyJiraError(
+        response.status,
+        body,
+        response.statusText || "Failed to fetch worklogs",
+      );
+      throw new JiraClientError(classification);
     }
 
     const data = (await response.json()) as {

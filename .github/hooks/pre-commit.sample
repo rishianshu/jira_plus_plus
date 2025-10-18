@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+
+# Pre-commit hook to run fast checks before creating a commit.
+# Copy to .git/hooks/pre-commit and make executable (`chmod +x`).
+
+set -euo pipefail
+
+branch="$(git rev-parse --abbrev-ref HEAD)"
+if [[ "$branch" == "main" ]]; then
+  echo "[pre-commit] Direct commits on 'main' are not allowed. Create a feature branch." >&2
+  exit 1
+fi
+
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "[pre-commit] pnpm not found. Install pnpm to run lint/typecheck/tests." >&2
+  exit 1
+fi
+
+echo "[pre-commit] lint"
+pnpm lint
+
+echo "[pre-commit] typecheck"
+pnpm typecheck
+
+echo "[pre-commit] unit tests"
+pnpm test -- --run --passWithNoTests

@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { X } from "lucide-react";
+import clsx from "clsx";
 import { Button } from "./button";
 
 interface ModalProps {
@@ -11,6 +12,7 @@ interface ModalProps {
   description?: string;
   children: ReactNode;
   primaryAction?: ReactNode;
+  contentClassName?: string;
 }
 
 export function Modal({
@@ -20,6 +22,7 @@ export function Modal({
   description,
   children,
   primaryAction,
+  contentClassName,
 }: ModalProps) {
   useEffect(() => {
     if (!open) {
@@ -40,7 +43,12 @@ export function Modal({
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 backdrop-blur">
-      <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl shadow-slate-200/70 dark:border-slate-800 dark:bg-slate-900 dark:shadow-slate-950/70">
+      <div
+        className={clsx(
+          "w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl shadow-slate-200/70 dark:border-slate-800 dark:bg-slate-900 dark:shadow-slate-950/70",
+          contentClassName,
+        )}
+      >
         <header className="mb-6 flex items-start justify-between gap-4">
           <div className="space-y-1">
             <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{title}</h3>

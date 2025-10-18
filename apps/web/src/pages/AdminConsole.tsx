@@ -17,6 +17,7 @@ const ADMIN_CONSOLE_QUERY = gql`
       id
       email
       displayName
+      phone
       role
       createdAt
     }
@@ -102,8 +103,15 @@ const CREATE_USER_MUTATION = gql`
       id
       email
       displayName
+      phone
       role
     }
+  }
+`;
+
+const SEND_INVITE_EMAIL_MUTATION = gql`
+  mutation SendUserInviteEmail($input: UserInviteEmailInput!) {
+    sendUserInviteEmail(input: $input)
   }
 `;
 
@@ -177,8 +185,8 @@ const PROJECT_OPTIONS_QUERY = gql`
 `;
 
 const PROJECT_USERS_OPTIONS_QUERY = gql`
-  query JiraProjectUserOptions($siteId: ID!, $projectKey: String!) {
-    jiraProjectUserOptions(siteId: $siteId, projectKey: $projectKey) {
+  query JiraProjectUserOptions($siteId: ID!, $projectKey: String!, $forceRefresh: Boolean) {
+    jiraProjectUserOptions(siteId: $siteId, projectKey: $projectKey, forceRefresh: $forceRefresh) {
       accountId
       displayName
       email
@@ -228,11 +236,20 @@ type TrackedUserPayload = {
   isTracked: boolean;
 };
 
+type ImportUserRow = {
+  accountId: string;
+  displayName: string;
+  email: string;
+  phone: string;
+  role: "ADMIN" | "MANAGER" | "USER";
+};
+
 type AdminConsoleData = {
   users: Array<{
     id: string;
     email: string;
     displayName: string;
+    phone?: string | null;
     role: string;
     createdAt: string;
   }>;
@@ -345,10 +362,32 @@ const formatDate = (value: string) => {
   }
 };
 
+function generateTemporaryPassword(length = 12): string {
+  const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+  const randomValues = new Uint32Array(length);
+  const cryptoSource =
+    typeof globalThis !== "undefined" && typeof globalThis.crypto !== "undefined"
+      ? globalThis.crypto
+      : undefined;
+
+  if (cryptoSource && typeof cryptoSource.getRandomValues === "function") {
+    cryptoSource.getRandomValues(randomValues);
+    return Array.from(randomValues, (value) => characters[value % characters.length]).join("");
+  }
+
+  let password = "";
+  for (let index = 0; index < length; index += 1) {
+    const randomIndex = Math.floor(Math.random() * characters.length);
+    password += characters[randomIndex];
+  }
+  return password;
+}
+
 export function AdminConsolePage() {
   const { user } = useAuth();
   const { data, loading, error, refetch } = useQuery<AdminConsoleData>(ADMIN_CONSOLE_QUERY);
   const [activeModal, setActiveModal] = useState<ModalType>(null);
+  const [importModalOpen, setImportModalOpen] = useState<boolean>(false);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [projectUsersModal, setProjectUsersModal] = useState<
     | {
@@ -646,10 +685,16 @@ export function AdminConsolePage() {
             title="Directory"
             description="Provision teammates with scoped access. Only admins can invite or elevate users."
             action={
-              <Button onClick={() => setActiveModal("user")}>
-                <PlusCircle className="mr-2 h-4 w-4" />
-                Invite user
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={() => setImportModalOpen(true)} variant="outline">
+                  <Users className="mr-2 h-4 w-4" />
+                  Import Jira users
+                </Button>
+                <Button onClick={() => setActiveModal("user")}>
+                  <PlusCircle className="mr-2 h-4 w-4" />
+                  Invite user
+                </Button>
+              </div>
             }
           />
           {loading ? (
@@ -664,6 +709,7 @@ export function AdminConsolePage() {
                     <th className="px-4 py-3 font-semibold">Name</th>
                     <th className="px-4 py-3 font-semibold">Email</th>
                     <th className="px-4 py-3 font-semibold">Role</th>
+                    <th className="px-4 py-3 font-semibold">Phone</th>
                     <th className="px-4 py-3 font-semibold">Joined</th>
                   </tr>
                 </thead>
@@ -681,6 +727,9 @@ export function AdminConsolePage() {
                         <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
                           {entry.role.toLowerCase()}
                         </span>
+                      </td>
+                      <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
+                        {entry.phone ?? "—"}
                       </td>
                       <td className="px-4 py-3 text-slate-500 dark:text-slate-400">
                         {formatDate(entry.createdAt)}
@@ -813,6 +862,16 @@ export function AdminConsolePage() {
         onCompleted={() => {
           setActiveModal(null);
           void refetch();
+        }}
+      />
+      <ImportUsersModal
+        open={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        sites={sites}
+        projects={projects}
+        onCompleted={async () => {
+          setImportModalOpen(false);
+          await refetch();
         }}
       />
       <MapUserModal
@@ -1021,7 +1080,7 @@ function RegisterProjectModal({
     const defaultSite = sites[0];
     if (defaultSite) {
       setSiteId(defaultSite.id);
-      void loadOptions({ variables: { siteId: defaultSite.id } });
+    void loadOptions({ variables: { siteId: defaultSite.id, forceRefresh: false } });
     }
   }, [loadOptions, open, sites]);
 
@@ -1033,7 +1092,7 @@ function RegisterProjectModal({
     setJiraId("");
     setKey("");
     setName("");
-    void loadOptions({ variables: { siteId } });
+    void loadOptions({ variables: { siteId, forceRefresh: false } });
   }, [loadOptions, open, siteId]);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -1152,7 +1211,8 @@ function CreateUserModal({
 }) {
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [role, setRole] = useState<"ADMIN" | "USER">("USER");
+  const [role, setRole] = useState<"ADMIN" | "MANAGER" | "USER">("USER");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [createUser, { loading }] = useMutation(CREATE_USER_MUTATION);
@@ -1162,6 +1222,7 @@ function CreateUserModal({
       setEmail("");
       setDisplayName("");
       setRole("USER");
+      setPhone("");
       setPassword("");
       setMessage(null);
     }
@@ -1171,7 +1232,15 @@ function CreateUserModal({
     event.preventDefault();
     setMessage(null);
     void createUser({
-      variables: { input: { email, displayName, password, role } },
+      variables: {
+        input: {
+          email,
+          displayName,
+          password,
+          role,
+          phone: phone || null,
+        },
+      },
       onCompleted,
       onError: (mutationError) => {
         setMessage(mutationError.message);
@@ -1203,6 +1272,13 @@ function CreateUserModal({
           required
         />
         <Input
+          label="Phone (optional)"
+          value={phone}
+          onChange={setPhone}
+          placeholder="+1 555 0100"
+          type="tel"
+        />
+        <Input
           label="Temporary password"
           value={password}
           onChange={setPassword}
@@ -1214,9 +1290,10 @@ function CreateUserModal({
           <select
             className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-slate-600"
             value={role}
-            onChange={(event) => setRole(event.target.value as "ADMIN" | "USER")}
+            onChange={(event) => setRole(event.target.value as "ADMIN" | "MANAGER" | "USER")}
           >
             <option value="USER">User</option>
+            <option value="MANAGER">Manager</option>
             <option value="ADMIN">Admin</option>
           </select>
         </label>
@@ -1226,6 +1303,488 @@ function CreateUserModal({
             {loading ? "Creating…" : "Create user"}
           </Button>
         </div>
+      </form>
+    </Modal>
+  );
+}
+
+function ImportUsersModal({
+  open,
+  onClose,
+  onCompleted,
+  sites,
+  projects,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCompleted: () => Promise<void> | void;
+  sites: Array<{ id: string; alias: string }>;
+  projects: Array<{
+    id: string;
+    siteId: string;
+    siteAlias: string;
+    key: string;
+    name: string;
+  }>;
+}) {
+  const [siteId, setSiteId] = useState<string>("");
+  const [projectId, setProjectId] = useState<string>("");
+  const [search, setSearch] = useState("");
+  const [sendEmails, setSendEmails] = useState(true);
+  const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(new Set());
+  const [rows, setRows] = useState<Record<string, ImportUserRow>>({});
+  const [message, setMessage] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [assignableUsers, setAssignableUsers] = useState<ProjectUserDetail[]>([]);
+  const [assignableCache, setAssignableCache] = useState<Record<string, ProjectUserDetail[]>>({});
+
+  const [loadOptions, { data: optionsData, loading: optionsLoading, error: optionsError }] =
+    useLazyQuery<ProjectUserOptionsData>(PROJECT_USERS_OPTIONS_QUERY);
+  const [createUser] = useMutation(CREATE_USER_MUTATION);
+  const [mapUser] = useMutation(MAP_USER_MUTATION);
+  const [sendInvite] = useMutation(SEND_INVITE_EMAIL_MUTATION);
+
+  const projectOptionsForSite = useMemo(
+    () => projects.filter((project) => project.siteId === siteId),
+    [projects, siteId],
+  );
+
+  useEffect(() => {
+    if (!open) {
+      setSiteId("");
+      setProjectId("");
+      setSelectedAccounts(new Set());
+      setRows({});
+      setSearch("");
+      setMessage(null);
+      setAssignableUsers([]);
+      return;
+    }
+    const defaultSite = sites[0];
+    if (defaultSite) {
+      setSiteId(defaultSite.id);
+    }
+  }, [open, sites]);
+
+  useEffect(() => {
+    if (!open || !siteId) {
+      return;
+    }
+    const firstProject = projects.find((project) => project.siteId === siteId);
+    if (firstProject) {
+      setProjectId(firstProject.id);
+    }
+  }, [open, siteId, projects]);
+
+  useEffect(() => {
+    if (!open || !projectId) {
+      return;
+    }
+    setSelectedAccounts(new Set());
+    setRows({});
+    setSearch("");
+    const project = projects.find((entry) => entry.id === projectId);
+    if (!project) {
+      setAssignableUsers([]);
+      return;
+    }
+    const cacheKey = `${project.siteId}:${project.id}`;
+    const cached = assignableCache[cacheKey];
+    if (cached) {
+      setAssignableUsers(cached);
+    } else {
+      setAssignableUsers([]);
+      void loadOptions({
+        variables: { siteId: project.siteId, projectKey: project.key },
+        fetchPolicy: "network-only",
+      });
+    }
+  }, [open, projectId, projects, assignableCache, loadOptions]);
+
+  useEffect(() => {
+    if (!open || !projectId) {
+      return;
+    }
+    const project = projects.find((entry) => entry.id === projectId);
+    if (!project) {
+      return;
+    }
+    if (optionsData?.jiraProjectUserOptions) {
+      const key = `${project.siteId}:${project.id}`;
+      setAssignableUsers(optionsData.jiraProjectUserOptions);
+      setAssignableCache((previous) => ({
+        ...previous,
+        [key]: optionsData.jiraProjectUserOptions ?? [],
+      }));
+    }
+  }, [open, optionsData?.jiraProjectUserOptions, projectId, projects]);
+
+  useEffect(() => {
+    if (!open || assignableUsers.length === 0) {
+      return;
+    }
+    setRows((previous) => {
+      const next = { ...previous };
+      for (const candidate of assignableUsers) {
+        const key = candidate.accountId;
+        if (!next[key]) {
+          next[key] = {
+            accountId: key,
+            displayName: candidate.displayName || key,
+            email: candidate.email ?? "",
+            phone: "",
+            role: "USER",
+          };
+        }
+      }
+      return next;
+    });
+    setSelectedAccounts((prev) => {
+      if (prev.size > 0) {
+        return prev;
+      }
+      return new Set(assignableUsers.map((user) => user.accountId));
+    });
+  }, [assignableUsers, open]);
+
+  const filteredCandidates = useMemo(() => {
+    if (!search.trim()) {
+      return assignableUsers;
+    }
+    const term = search.trim().toLowerCase();
+    return assignableUsers.filter((candidate) => {
+      const haystack = [candidate.displayName ?? "", candidate.email ?? "", candidate.accountId]
+        .join("\n")
+        .toLowerCase();
+      return haystack.includes(term);
+    });
+  }, [assignableUsers, search]);
+
+  const toggleSelection = (accountId: string) => {
+    setSelectedAccounts((prev) => {
+      const next = new Set(prev);
+      if (next.has(accountId)) {
+        next.delete(accountId);
+      } else {
+        next.add(accountId);
+      }
+      return next;
+    });
+  };
+
+  const updateRow = (accountId: string, patch: Partial<ImportUserRow>) => {
+    setRows((prev) => ({
+      ...prev,
+      [accountId]: {
+        ...prev[accountId],
+        ...patch,
+      },
+    }));
+  };
+
+  const handleImport = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!projectId) {
+      setMessage("Select a Jira project before importing.");
+      return;
+    }
+    if (selectedAccounts.size === 0) {
+      setMessage("Select at least one Jira user to import.");
+      return;
+    }
+    setSubmitting(true);
+    setMessage(null);
+    const errors: string[] = [];
+
+    for (const accountId of selectedAccounts) {
+      const row = rows[accountId];
+      if (!row) {
+        continue;
+      }
+      if (!row.email.trim()) {
+        errors.push(`${row.displayName} requires an email address.`);
+        continue;
+      }
+      const password = generateTemporaryPassword();
+
+      let createdUserId: string | null = null;
+      try {
+        const response = await createUser({
+          variables: {
+            input: {
+              email: row.email.trim(),
+              displayName: row.displayName.trim() || accountId,
+              password,
+              phone: row.phone.trim() ? row.phone.trim() : null,
+              role: row.role,
+            },
+          },
+        });
+        createdUserId = response.data?.createUser?.id ?? null;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to import user.";
+        errors.push(`${row.displayName || accountId}: ${message}`);
+        continue;
+      }
+
+      if (createdUserId) {
+        try {
+          await mapUser({
+            variables: {
+              input: {
+                userId: createdUserId,
+                projectId,
+                jiraAccountId: row.accountId,
+              },
+            },
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Failed to map user to project.";
+          errors.push(`${row.displayName || accountId}: ${message}`);
+        }
+      }
+
+      if (sendEmails) {
+        try {
+          await sendInvite({
+            variables: {
+              input: {
+                email: row.email.trim(),
+                displayName: row.displayName.trim() || accountId,
+                temporaryPassword: password,
+              },
+            },
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Failed to send invite email.";
+          errors.push(`${row.displayName || accountId}: ${message}`);
+        }
+      }
+    }
+
+    setSubmitting(false);
+
+    if (errors.length) {
+      setMessage(errors.join("\n"));
+      return;
+    }
+
+    await onCompleted();
+  };
+
+  const activeSite = sites.find((site) => site.id === siteId);
+  const activeProject = projects.find((project) => project.id === projectId);
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Import Jira users"
+      description="Select Jira accounts to create platform users. Details can be adjusted before import."
+      contentClassName="w-full max-w-6xl xl:max-w-7xl"
+      primaryAction={
+        <Button type="submit" form="import-users-form" disabled={submitting || selectedAccounts.size === 0}>
+          {submitting
+            ? "Importing…"
+            : selectedAccounts.size === 0
+              ? "Import"
+              : `Import ${selectedAccounts.size} user${selectedAccounts.size === 1 ? "" : "s"}`}
+        </Button>
+      }
+    >
+      <form id="import-users-form" className="space-y-4" onSubmit={handleImport}>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="flex flex-col gap-2 text-sm text-slate-600 dark:text-slate-300">
+            <span className="font-medium text-slate-700 dark:text-slate-200">Jira site</span>
+            <select
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-slate-600"
+              value={siteId}
+              onChange={(event) => setSiteId(event.target.value)}
+            >
+              {sites.length === 0 ? <option value="">No Jira sites</option> : null}
+              {sites.map((site) => (
+                <option key={site.id} value={site.id}>
+                  {site.alias}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-2 text-sm text-slate-600 dark:text-slate-300">
+            <span className="font-medium text-slate-700 dark:text-slate-200">Jira project</span>
+            <select
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-slate-600"
+              value={projectId}
+              onChange={(event) => setProjectId(event.target.value)}
+            >
+              {projectOptionsForSite.length === 0 ? <option value="">No projects</option> : null}
+              {projectOptionsForSite.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name} ({project.key})
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Importing from {activeProject?.name ?? "selected project"} · {activeSite?.alias ?? ""}
+          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search Jira users…"
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:border-slate-400 dark:focus:ring-slate-700"
+            />
+            <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-slate-300">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-500 dark:border-slate-600 dark:bg-slate-900"
+                checked={sendEmails}
+                onChange={(event) => setSendEmails(event.target.checked)}
+              />
+              Send invite emails
+            </label>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (!projectId) {
+                  return;
+                }
+                const project = projects.find((entry) => entry.id === projectId);
+                if (!project) {
+                  return;
+                }
+                const key = `${project.siteId}:${project.id}`;
+                setAssignableCache((prev) => {
+                  const next = { ...prev };
+                  delete next[key];
+                  return next;
+                });
+                setAssignableUsers([]);
+                void loadOptions({
+                  variables: { siteId: project.siteId, projectKey: project.key },
+                  fetchPolicy: "network-only",
+                });
+              }}
+            >
+              Refresh list
+            </Button>
+          </div>
+        </div>
+
+        <div className="max-h-80 overflow-y-auto rounded-2xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+          {optionsLoading ? (
+            <p className="p-4 text-sm text-slate-500 dark:text-slate-400">Loading Jira users…</p>
+          ) : filteredCandidates.length === 0 ? (
+            <p className="p-4 text-sm text-slate-500 dark:text-slate-400">
+              No assignable users found for this project.
+            </p>
+          ) : (
+            <table className="min-w-[1100px] divide-y divide-slate-200 text-left text-sm dark:divide-slate-800">
+              <thead className="bg-slate-100 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
+                <tr>
+                  <th className="px-3 py-2">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-500 dark:border-slate-600 dark:bg-slate-900"
+                      checked={selectedAccounts.size > 0 && filteredCandidates.every((candidate) => selectedAccounts.has(candidate.accountId))}
+                      onChange={(event) => {
+                        if (event.target.checked) {
+                          setSelectedAccounts(new Set(filteredCandidates.map((candidate) => candidate.accountId)));
+                        } else {
+                          setSelectedAccounts(new Set());
+                        }
+                      }}
+                    />
+                  </th>
+                  <th className="px-3 py-2 font-semibold">Jira account</th>
+                  <th className="px-3 py-2 font-semibold">Display name</th>
+                  <th className="px-3 py-2 font-semibold">Email</th>
+                  <th className="px-3 py-2 font-semibold">Phone</th>
+                  <th className="px-3 py-2 font-semibold">Role</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                {filteredCandidates.map((candidate) => {
+                  const row = rows[candidate.accountId];
+                  if (!row) {
+                    return null;
+                  }
+                  const selected = selectedAccounts.has(candidate.accountId);
+                  return (
+                    <tr key={candidate.accountId} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/60">
+                      <td className="px-3 py-3 align-top">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-500 dark:border-slate-600 dark:bg-slate-900"
+                          checked={selected}
+                          onChange={() => toggleSelection(candidate.accountId)}
+                        />
+                      </td>
+                      <td className="px-3 py-3 align-top text-slate-500 dark:text-slate-400">
+                        <div className="flex flex-col text-xs">
+                          <span className="font-mono">{candidate.accountId}</span>
+                          {candidate.email ? <span>{candidate.email}</span> : null}
+                        </div>
+                      </td>
+                      <td className="px-3 py-3 align-top">
+                        <input
+                          type="text"
+                          className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700 focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-300 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200 dark:focus:border-slate-400 dark:focus:ring-slate-700"
+                          value={row.displayName}
+                          onChange={(event) => updateRow(candidate.accountId, { displayName: event.target.value })}
+                        />
+                      </td>
+                      <td className="px-3 py-3 align-top">
+                        <input
+                          type="email"
+                          className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700 focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-300 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200 dark:focus:border-slate-400 dark:focus:ring-slate-700"
+                          value={row.email}
+                          onChange={(event) => updateRow(candidate.accountId, { email: event.target.value })}
+                        />
+                      </td>
+                      <td className="px-3 py-3 align-top">
+                        <input
+                          type="tel"
+                          className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700 focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-300 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200 dark:focus:border-slate-400 dark:focus:ring-slate-700"
+                          value={row.phone}
+                          onChange={(event) => updateRow(candidate.accountId, { phone: event.target.value })}
+                        />
+                      </td>
+                      <td className="px-3 py-3 align-top">
+                        <select
+                          className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700 focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-300 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200 dark:focus:border-slate-400 dark:focus:ring-slate-700"
+                          value={row.role}
+                          onChange={(event) =>
+                            updateRow(candidate.accountId, {
+                              role: event.target.value as "ADMIN" | "MANAGER" | "USER",
+                            })
+                          }
+                        >
+                          <option value="USER">User</option>
+                          <option value="MANAGER">Manager</option>
+                          <option value="ADMIN">Admin</option>
+                        </select>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {optionsError ? <InlineMessage tone="error">{optionsError.message}</InlineMessage> : null}
+        {message ? <InlineMessage tone="error">{message.split("\n").map((line, index) => (
+          <span key={index} className="block">
+            {line}
+          </span>
+        ))}</InlineMessage> : null}
       </form>
     </Modal>
   );
@@ -1434,7 +1993,10 @@ function ProjectUsersModal({
     if (!open || !project) {
       return;
     }
-    void loadOptions({ variables: { siteId: project.siteId, projectKey: project.projectKey } });
+    void loadOptions({
+      variables: { siteId: project.siteId, projectKey: project.projectKey, forceRefresh: false },
+      fetchPolicy: "network-only",
+    });
   }, [loadOptions, open, project]);
 
   useEffect(() => {
@@ -1597,7 +2159,7 @@ function ProjectUsersModal({
                 onClick={() => {
                   if (project) {
                     void loadOptions({
-                      variables: { siteId: project.siteId, projectKey: project.projectKey },
+                      variables: { siteId: project.siteId, projectKey: project.projectKey, forceRefresh: true },
                       fetchPolicy: "network-only",
                     });
                   }

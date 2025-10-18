@@ -52,15 +52,22 @@ The job fails fast on any stage so we never merge broken builds.
 - Run `pnpm verify` before opening a PR. It executes `scripts/verify.sh` which
   installs deps, lints, typechecks, runs tests, and performs local Docker
   builds of the API and web images.
-- Shareable git hooks live under `.github/hooks`. Install them via:
+- Shareable git hooks live under `.github/hooks`. Install both commit and push hooks via:
 
   ```bash
-  cp .github/hooks/pre-commit.sample .git/hooks/pre-commit
-  chmod +x .git/hooks/pre-commit
+  pnpm hooks
   ```
 
 - Hooks stay local-only, so there’s no risk of leaking secrets; adjust the
-  script as your workflow evolves.
+  scripts as your workflow evolves. The pre-push hook blocks direct pushes from `main`.
+
+### Test Tiers
+
+1. **Unit Tests (UT)** – run locally (`pnpm --filter ... test -- --run`) for every change.
+2. **Local E2E** – browser/API automation (`./scripts/run-e2e-local.sh`) prior to `git push`.
+3. **Live E2E** – smoke suite (`./scripts/run-e2e-live.sh`) against the deployed UAT endpoint after `main` deploy.
+
+Record results in the PR/release notes to keep history of what ran.
 
 ## Deployments
 

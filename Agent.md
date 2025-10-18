@@ -9,7 +9,16 @@ To keep Jira++ healthy and avoid breaking builds, we'll hold ourselves to the fo
    - Read the spec and existing code before changing anything.
    - Keep diffs focused; note every assumption in commit messages or PR descriptions.
 
-3. **Run quick feedback commands after each logical change**
+3. **Treat tests as first-class**
+   - Every feature or spec change must ship with appropriate automated tests.
+   - Update the feature-specific coverage doc under `specs/features/*/test/coverage.md` with the new scenarios.
+   - Before coding, decide which tiers need coverage:
+     1. **Unit Tests** – cheap, code-level (`pnpm --filter … test`).
+     2. **Local E2E** – browser + API using Playwright/Cypress against `pnpm dev` stack.
+     3. **Live E2E** – smoke tests hitting the deployed UAT URL post-deploy.
+   - Record the chosen coverage in the PR description and the relevant spec.
+
+4. **Run quick feedback commands after each logical change**
 ```bash
 pnpm lint
 pnpm typecheck
@@ -30,6 +39,8 @@ pnpm test     # when tests exist for the area we touched
 6. **Final handoff checklist**
    - `pnpm format` (or ensure the editor auto-formatted).
    - `pnpm verify`
-   - Summarise what changed, the commands you ran, and any remaining TODOs.
+   - Run the local E2E suite when the story touches cross-cutting UX flows.
+   - Summarise what changed, the commands/tests you ran (unit + E2E), and any remaining TODOs.
+   - After deploy, kick off the live smoke tests and capture results in the PR or release notes.
 
 By codifying this loop we minimize regressions and make collaboration smoother—future edits should follow the same beat: **edit → lint/typecheck/tests → document → handoff**.
