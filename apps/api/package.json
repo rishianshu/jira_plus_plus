@@ -9,7 +9,7 @@
     "start": "node dist/index.js",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
-    "test": "vitest",
+    "test": "node ../../scripts/run-vitest.mjs",
     "typecheck": "tsc --noEmit",
     "prisma": "prisma",
     "temporal:worker": "tsx src/temporal/worker.ts"
