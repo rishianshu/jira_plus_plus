@@ -37,7 +37,7 @@ declare global {
         id?: string;
         email?: string;
         displayName?: string;
-        role?: "ADMIN" | "USER";
+        role?: "ADMIN" | "USER" | "MANAGER";
         token?: string;
       }): Chainable<void>;
       clearAuth(): Chainable<void>;

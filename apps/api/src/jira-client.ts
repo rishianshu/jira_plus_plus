@@ -97,7 +97,25 @@ export async function fetchJiraProjectUsers(
   prisma: PrismaClient,
   siteId: string,
   projectKey: string,
+  options: { forceRefresh?: boolean } = {},
 ): Promise<JiraUserOption[]> {
+  const normalizedKey = projectKey;
+
+  if (!options.forceRefresh) {
+    const cached = await prisma.jiraAssignableUser.findMany({
+      where: { siteId, projectKey: normalizedKey },
+      orderBy: [{ displayName: "asc" as const }, { accountId: "asc" as const }],
+    });
+    if (cached.length) {
+      return cached.map((user) => ({
+        accountId: user.accountId,
+        displayName: user.displayName ?? user.accountId,
+        email: user.email ?? null,
+        avatarUrl: user.avatarUrl ?? null,
+      }));
+    }
+  }
+
   const { site, token } = await resolveSiteAuth(prisma, siteId);
 
   const baseUrl = new URL(`${site.baseUrl.replace(/\/$/, "")}/rest/api/3/user/assignable/search`);
@@ -151,7 +169,52 @@ export async function fetchJiraProjectUsers(
     startAt += maxResults;
   }
 
-  return users;
+  const accountIds = users.map((user) => user.accountId);
+
+  await prisma.$transaction(async (tx) => {
+    if (accountIds.length === 0) {
+      await tx.jiraAssignableUser.deleteMany({ where: { siteId, projectKey: normalizedKey } });
+      return;
+    }
+
+    await tx.jiraAssignableUser.deleteMany({
+      where: {
+        siteId,
+        projectKey: normalizedKey,
+        accountId: { notIn: accountIds },
+      },
+    });
+
+    await Promise.all(
+      users.map((user) =>
+        tx.jiraAssignableUser.upsert({
+          where: {
+            siteId_projectKey_accountId: {
+              siteId,
+              projectKey: normalizedKey,
+              accountId: user.accountId,
+            },
+          },
+          update: {
+            displayName: user.displayName ?? null,
+            email: user.email ?? null,
+            avatarUrl: user.avatarUrl ?? null,
+            fetchedAt: new Date(),
+          },
+          create: {
+            siteId,
+            projectKey: normalizedKey,
+            accountId: user.accountId,
+            displayName: user.displayName ?? null,
+            email: user.email ?? null,
+            avatarUrl: user.avatarUrl ?? null,
+          },
+        }),
+      ),
+    );
+  });
+
+  return users.sort((a, b) => (a.displayName ?? a.accountId).localeCompare(b.displayName ?? b.accountId));
 }
 
 export interface JiraIssueSearchResponse {

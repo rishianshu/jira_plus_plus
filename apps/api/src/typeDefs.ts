@@ -7,6 +7,7 @@ export const typeDefs = gql`
 
   enum Role {
     ADMIN
+    MANAGER
     USER
   }
 
@@ -32,6 +33,7 @@ export const typeDefs = gql`
     id: ID!
     email: String!
     displayName: String!
+    phone: String
     role: Role!
     createdAt: DateTime!
     updatedAt: DateTime!
@@ -315,7 +317,14 @@ export const typeDefs = gql`
     email: String!
     displayName: String!
     password: String!
+    phone: String
     role: Role = USER
+  }
+
+  input UserInviteEmailInput {
+    email: String!
+    displayName: String!
+    temporaryPassword: String!
   }
 
   input UpdateUserRoleInput {
@@ -369,7 +378,7 @@ export const typeDefs = gql`
     jiraProjects(siteId: ID!): [JiraProject!]!
     userProjectLinks(userId: ID!): [UserProjectLink!]!
     jiraProjectOptions(siteId: ID!): [JiraProjectOption!]!
-    jiraProjectUserOptions(siteId: ID!, projectKey: String!): [JiraUserOption!]!
+    jiraProjectUserOptions(siteId: ID!, projectKey: String!, forceRefresh: Boolean = false): [JiraUserOption!]!
     projectTrackedUsers(projectId: ID!): [ProjectTrackedUser!]!
     dailySummaries(date: Date!, projectId: ID!): [DailySummary!]!
     scrumProjects: [JiraProject!]!
@@ -418,6 +427,7 @@ export const typeDefs = gql`
   type Mutation {
     login(input: LoginInput!): AuthPayload!
     createUser(input: CreateUserInput!): User!
+    sendUserInviteEmail(input: UserInviteEmailInput!): Boolean!
     updateUserRole(input: UpdateUserRoleInput!): User!
     registerJiraSite(input: RegisterJiraSiteInput!): JiraSite!
     registerJiraProject(input: RegisterJiraProjectInput!): JiraProject!

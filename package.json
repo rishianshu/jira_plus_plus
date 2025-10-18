@@ -9,7 +9,7 @@
     "lint": "pnpm -r --filter './apps/*' lint",
     "typecheck": "pnpm -r --filter './apps/*' typecheck",
     "format": "pnpm -r --filter './apps/*' format",
-    "test": "pnpm -r --filter './apps/*' test",
+    "test": "pnpm -r --filter './apps/*' test --",
     "verify": "bash scripts/verify.sh",
     "hooks": "bash scripts/setup-hooks.sh",
     "e2e:run": "cypress run --config-file cypress.config.ts",

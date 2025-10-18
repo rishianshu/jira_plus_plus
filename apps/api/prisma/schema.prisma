@@ -12,6 +12,7 @@ model User {
   id           String            @id @default(uuid())
   email        String            @unique
   displayName  String
+  phone        String?
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
   role         Role              @default(USER)
@@ -56,6 +57,7 @@ model JiraSite {
   updatedAt   DateTime      @updatedAt
   projects    JiraProject[]
   createdBy   User?         @relation("SiteCreator", fields: [createdById], references: [id])
+  assignableUsers JiraAssignableUser[]
 }
 
 model JiraProject {
@@ -95,6 +97,23 @@ model ProjectTrackedUser {
   performanceNotes PerformanceReviewNote[]
 
   @@unique([projectId, jiraAccountId])
+}
+
+model JiraAssignableUser {
+  id         String   @id @default(uuid())
+  siteId     String
+  projectKey String
+  accountId  String
+  displayName String?
+  email      String?
+  avatarUrl  String?
+  fetchedAt  DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  site       JiraSite @relation(fields: [siteId], references: [id])
+
+  @@unique([siteId, projectKey, accountId])
+  @@index([siteId, projectKey])
 }
 
 model Sprint {
@@ -249,6 +268,7 @@ model SyncLog {
 
 enum Role {
   ADMIN
+  MANAGER
   USER
 }
 

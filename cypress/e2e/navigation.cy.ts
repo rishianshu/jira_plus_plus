@@ -85,7 +85,7 @@ describe("Navigation and access control", () => {
     cy.contains("nav", "Home").should("exist");
     cy.contains("nav", "Daily Scrum").should("exist");
     cy.contains("nav", "Developer Focus").should("exist");
-    cy.contains("nav", "Manager Summary").should("exist");
+    cy.contains("nav", "Manager Summary").should("not.exist");
     cy.contains("nav", "Admin Console").should("not.exist");
 
     cy.visit("/scrum");
@@ -125,5 +125,32 @@ describe("Navigation and access control", () => {
     cy.contains("nav", "Admin Console").should("exist");
     cy.visit("/admin");
     cy.url().should("contain", "/admin");
+  });
+
+  it("shows manager navigation when manager role", () => {
+    cy.mockGraphql({});
+
+    cy.visit("/", {
+      onBeforeLoad(win) {
+        win.localStorage.setItem(TOKEN_STORAGE_KEY, "manager-token");
+        win.localStorage.setItem(
+          "jira-plus-plus/user",
+          JSON.stringify({
+            id: "manager-1",
+            email: "manager@example.com",
+            displayName: "Manager",
+            role: "MANAGER",
+          }),
+        );
+      },
+    });
+
+    cy.contains("nav", "Daily Scrum").should("exist");
+    cy.contains("nav", "Developer Focus").should("exist");
+    cy.contains("nav", "Manager Summary").should("exist");
+    cy.contains("nav", "Admin Console").should("not.exist");
+
+    cy.visit("/manager");
+    cy.url().should("contain", "/manager");
   });
 });

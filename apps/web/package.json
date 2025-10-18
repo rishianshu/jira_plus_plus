@@ -8,7 +8,7 @@
     "start": "vite preview",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md,css,scss}\"",
-    "test": "vitest --run --passWithNoTests --environment node",
+    "test": "vitest --environment node",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

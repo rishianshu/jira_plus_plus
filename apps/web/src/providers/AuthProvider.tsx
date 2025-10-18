@@ -5,7 +5,7 @@ import { TOKEN_STORAGE_KEY } from "../lib/apollo-client";
 
 const USER_STORAGE_KEY = "jira-plus-plus/user";
 
-export type Role = "ADMIN" | "USER";
+export type Role = "ADMIN" | "MANAGER" | "USER";
 
 export interface AuthUser {
   id: string;

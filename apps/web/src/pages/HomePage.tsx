@@ -54,7 +54,7 @@ export function HomePage() {
               </Link>
             </div>
           </div>
-          {user?.role === "ADMIN" ? null : <LoginCard />}
+          {user ? null : <LoginCard />}
         </div>
       </section>
       <section className="grid gap-6 rounded-3xl border border-slate-200 bg-white/90 p-8 shadow-lg shadow-slate-200/50 dark:border-slate-800 dark:bg-slate-900/60 dark:shadow-slate-950/50">

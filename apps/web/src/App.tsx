@@ -25,16 +25,16 @@ export default function App() {
 function Shell() {
   const { user } = useAuth();
   const navigationItems = useMemo(() => {
+    const base = [{ to: "/", label: "Home" }];
     if (!user) {
-      return [{ to: "/", label: "Home" }];
+      return base;
     }
 
-    const items = [
-      { to: "/", label: "Home" },
-      { to: "/scrum", label: "Daily Scrum" },
-      { to: "/focus", label: "Developer Focus" },
-      { to: "/manager", label: "Manager Summary" },
-    ];
+    const items = [...base, { to: "/scrum", label: "Daily Scrum" }, { to: "/focus", label: "Developer Focus" }];
+
+    if (user.role === "MANAGER" || user.role === "ADMIN") {
+      items.push({ to: "/manager", label: "Manager Summary" });
+    }
 
     if (user.role === "ADMIN") {
       items.push({ to: "/admin", label: "Admin Console" });
@@ -96,9 +96,9 @@ function Shell() {
           <Route
             path="/manager"
             element={
-              <RequireAuth>
+              <RequireManager>
                 <ManagerPage />
-              </RequireAuth>
+              </RequireManager>
             }
           />
           <Route
@@ -123,6 +123,17 @@ function linkClass({ isActive }: { isActive: boolean }) {
       ? "bg-slate-900 text-white shadow-sm dark:bg-slate-100 dark:text-slate-900"
       : "text-slate-600 hover:bg-slate-900 hover:text-white dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-50",
   );
+}
+
+function RequireManager({ children }: { children: JSX.Element }) {
+  const { user } = useAuth();
+  if (!user) {
+    return <Navigate to="/" replace />;
+  }
+  if (user.role !== "ADMIN" && user.role !== "MANAGER") {
+    return <Navigate to="/" replace />;
+  }
+  return children;
 }
 
 function RequireAdmin({ children }: { children: JSX.Element }) {

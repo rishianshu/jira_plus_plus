@@ -6,6 +6,7 @@ import { CredentialType, type ProjectTrackedUser } from "@prisma/client";
 import type { RequestContext } from "./context.js";
 import { createAuthToken, encryptSecret, hashPassword, verifyPassword } from "./auth.js";
 import { fetchJiraProjectOptions, fetchJiraProjectUsers } from "./jira-client.js";
+import { sendUserInviteEmail } from "./services/communication/inviteService.js";
 import {
   initializeProjectSync,
   pauseProjectSync,
@@ -108,11 +109,13 @@ export const resolvers = {
     },
     jiraProjectUserOptions: async (
       _parent: unknown,
-      args: { siteId: string; projectKey: string },
+      args: { siteId: string; projectKey: string; forceRefresh?: boolean },
       ctx: RequestContext,
     ) => {
       requireAdmin(ctx);
-      return fetchJiraProjectUsers(ctx.prisma, args.siteId, args.projectKey);
+      return fetchJiraProjectUsers(ctx.prisma, args.siteId, args.projectKey, {
+        forceRefresh: args.forceRefresh ?? false,
+      });
     },
     projectTrackedUsers: async (
       _parent: unknown,
@@ -292,12 +295,18 @@ export const resolvers = {
     createUser: async (
       _parent: unknown,
       args: {
-        input: { email: string; displayName: string; password: string; role?: "ADMIN" | "USER" };
+        input: {
+          email: string;
+          displayName: string;
+          password: string;
+          phone?: string | null;
+          role?: "ADMIN" | "MANAGER" | "USER";
+        };
       },
       ctx: RequestContext,
     ) => {
       requireAdmin(ctx);
-      const { email, displayName, password, role = "USER" } = args.input;
+      const { email, displayName, password, phone, role = "USER" } = args.input;
 
       const existing = await ctx.prisma.user.findUnique({ where: { email } });
       if (existing) {
@@ -311,6 +320,7 @@ export const resolvers = {
         data: {
           email,
           displayName,
+          phone,
           role,
           credential: {
             create: {
@@ -321,9 +331,22 @@ export const resolvers = {
         },
       });
     },
+    sendUserInviteEmail: async (
+      _parent: unknown,
+      args: { input: { email: string; displayName: string; temporaryPassword: string } },
+      ctx: RequestContext,
+    ) => {
+      requireAdmin(ctx);
+      await sendUserInviteEmail({
+        email: args.input.email,
+        displayName: args.input.displayName,
+        temporaryPassword: args.input.temporaryPassword,
+      });
+      return true;
+    },
     updateUserRole: async (
       _parent: unknown,
-      args: { input: { userId: string; role: "ADMIN" | "USER" } },
+      args: { input: { userId: string; role: "ADMIN" | "MANAGER" | "USER" } },
       ctx: RequestContext,
     ) => {
       const requester = requireAdmin(ctx);
