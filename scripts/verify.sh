@@ -4,6 +4,9 @@ set -euo pipefail
 echo "[verify] installing deps"
 pnpm install --frozen-lockfile >/dev/null
 
+echo "[verify] generate prisma client"
+pnpm --filter ./apps/api prisma generate --schema prisma/schema.prisma >/dev/null
+
 echo "[verify] lint"
 pnpm lint
 
