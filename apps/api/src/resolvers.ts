@@ -1,12 +1,21 @@
-import { GraphQLError } from "graphql";
 import path from "node:path";
 import { promises as fs } from "node:fs";
+import { GraphQLError } from "graphql";
 import { DateResolver, DateTimeResolver, JSONResolver } from "graphql-scalars";
 import { CredentialType, type ProjectTrackedUser } from "@prisma/client";
 import type { RequestContext } from "./context.js";
-import { createAuthToken, encryptSecret, hashPassword, verifyPassword } from "./auth.js";
+import {
+  createAuthToken,
+  encryptSecret,
+  generateTemporaryPassword,
+  hashPassword,
+  verifyPassword,
+} from "./auth.js";
 import { fetchJiraProjectOptions, fetchJiraProjectUsers } from "./jira-client.js";
-import { sendUserInviteEmail } from "./services/communication/inviteService.js";
+import {
+  sendPasswordResetEmail,
+  sendUserInviteEmail,
+} from "./services/communication/inviteService.js";
 import {
   initializeProjectSync,
   pauseProjectSync,
@@ -23,7 +32,7 @@ import {
   generateSummaryForUser,
 } from "./services/dailySummaryService.js";
 import { buildFocusBoard } from "./services/focusBoardService.js";
-import { buildManagerSummary } from "./services/managerSummaryService.js";
+import { buildManagerSummary, buildPortfolioManagerSummary } from "./services/managerSummaryService.js";
 
 function requireUser(ctx: RequestContext) {
   if (!ctx.user) {
@@ -148,10 +157,24 @@ export const resolvers = {
     },
     scrumProjects: async (_parent: unknown, _args: unknown, ctx: RequestContext) => {
       const auth = requireUser(ctx);
+      const projectInclude = {
+        trackedUsers: {
+          where: { isTracked: true },
+          select: {
+            id: true,
+            displayName: true,
+            jiraAccountId: true,
+            email: true,
+            avatarUrl: true,
+            isTracked: true,
+          },
+        },
+      } as const;
       if (auth.role === "ADMIN") {
         return ctx.prisma.jiraProject.findMany({
           where: { isActive: true },
           orderBy: { name: "asc" },
+          include: projectInclude,
         });
       }
 
@@ -163,6 +186,7 @@ export const resolvers = {
           },
         },
         orderBy: { name: "asc" },
+        include: projectInclude,
       });
     },
     focusBoard: async (
@@ -232,16 +256,46 @@ export const resolvers = {
     },
     managerSummary: async (
       _parent: unknown,
-      args: { projectId: string; sprintId?: string | null },
+      args: { projectId?: string | null; sprintId?: string | null },
       ctx: RequestContext,
     ) => {
       const auth = requireUser(ctx);
       try {
-        return await buildManagerSummary(ctx.prisma, auth, {
-          projectId: args.projectId,
-          sprintId: args.sprintId ?? null,
-        });
+        if (args.projectId) {
+          return await buildManagerSummary(ctx.prisma, auth, {
+            projectId: args.projectId,
+            sprintId: args.sprintId ?? null,
+          });
+        }
+
+        const accessibleProjects =
+          auth.role === "ADMIN"
+            ? await ctx.prisma.jiraProject.findMany({
+                where: { isActive: true },
+                select: { id: true },
+              })
+            : await ctx.prisma.jiraProject.findMany({
+                where: {
+                  isActive: true,
+                  accountLinks: {
+                    some: { userId: auth.id },
+                  },
+                },
+                select: { id: true },
+              });
+
+        const projectIds = accessibleProjects.map((project) => project.id);
+        if (!projectIds.length) {
+          throw new GraphQLError("No accessible projects available", {
+            extensions: { code: "NOT_FOUND" },
+          });
+        }
+
+        return await buildPortfolioManagerSummary(ctx.prisma, auth, projectIds);
       } catch (error) {
+        if (error instanceof GraphQLError) {
+          throw error;
+        }
         if (error instanceof Error) {
           const statusCode = (error as Error & { statusCode?: number }).statusCode ?? 500;
           const code =
@@ -298,15 +352,21 @@ export const resolvers = {
         input: {
           email: string;
           displayName: string;
-          password: string;
           phone?: string | null;
           role?: "ADMIN" | "MANAGER" | "USER";
+          sendInvite?: boolean | null;
         };
       },
       ctx: RequestContext,
     ) => {
       requireAdmin(ctx);
-      const { email, displayName, password, phone, role = "USER" } = args.input;
+      const {
+        email,
+        displayName,
+        phone,
+        role = "USER",
+        sendInvite = true,
+      } = args.input;
 
       const existing = await ctx.prisma.user.findUnique({ where: { email } });
       if (existing) {
@@ -315,8 +375,9 @@ export const resolvers = {
         });
       }
 
-      const passwordHash = await hashPassword(password);
-      return ctx.prisma.user.create({
+      const temporaryPassword = generateTemporaryPassword();
+      const passwordHash = await hashPassword(temporaryPassword);
+      const user = await ctx.prisma.user.create({
         data: {
           email,
           displayName,
@@ -330,18 +391,79 @@ export const resolvers = {
           },
         },
       });
+
+      if (sendInvite) {
+        try {
+          await sendUserInviteEmail({
+            email: user.email,
+            displayName: user.displayName,
+            temporaryPassword,
+          });
+        } catch (error) {
+          console.error("Failed to send invite email", error);
+          throw new GraphQLError("User created, but failed to send invitation email", {
+            extensions: { code: "INTERNAL_SERVER_ERROR" },
+          });
+        }
+      }
+
+      return user;
     },
-    sendUserInviteEmail: async (
+    resetUserPassword: async (
       _parent: unknown,
-      args: { input: { email: string; displayName: string; temporaryPassword: string } },
+      args: { input: { userId: string } },
       ctx: RequestContext,
     ) => {
       requireAdmin(ctx);
-      await sendUserInviteEmail({
-        email: args.input.email,
-        displayName: args.input.displayName,
-        temporaryPassword: args.input.temporaryPassword,
+      const { userId } = args.input;
+
+      const user = await ctx.prisma.user.findUnique({
+        where: { id: userId },
       });
+
+      if (!user) {
+        throw new GraphQLError("User not found", {
+          extensions: { code: "NOT_FOUND" },
+        });
+      }
+
+      const temporaryPassword = generateTemporaryPassword();
+      const passwordHash = await hashPassword(temporaryPassword);
+
+      await ctx.prisma.$transaction(async (tx) => {
+        const credential = await tx.credential.findUnique({
+          where: { userId: user.id },
+        });
+
+        if (credential) {
+          await tx.credential.update({
+            where: { id: credential.id },
+            data: { secretHash: passwordHash },
+          });
+        } else {
+          await tx.credential.create({
+            data: {
+              type: CredentialType.LOCAL,
+              secretHash: passwordHash,
+              userId: user.id,
+            },
+          });
+        }
+      });
+
+      try {
+        await sendPasswordResetEmail({
+          email: user.email,
+          displayName: user.displayName,
+          temporaryPassword,
+        });
+      } catch (error) {
+        console.error("Failed to send password reset email", error);
+        throw new GraphQLError("Password updated, but failed to send reset email", {
+          extensions: { code: "INTERNAL_SERVER_ERROR" },
+        });
+      }
+
       return true;
     },
     updateUserRole: async (

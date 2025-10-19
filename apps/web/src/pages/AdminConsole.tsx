@@ -109,9 +109,9 @@ const CREATE_USER_MUTATION = gql`
   }
 `;
 
-const SEND_INVITE_EMAIL_MUTATION = gql`
-  mutation SendUserInviteEmail($input: UserInviteEmailInput!) {
-    sendUserInviteEmail(input: $input)
+const RESET_USER_PASSWORD_MUTATION = gql`
+  mutation ResetUserPassword($input: ResetUserPasswordInput!) {
+    resetUserPassword(input: $input)
   }
 `;
 
@@ -362,27 +362,6 @@ const formatDate = (value: string) => {
   }
 };
 
-function generateTemporaryPassword(length = 12): string {
-  const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
-  const randomValues = new Uint32Array(length);
-  const cryptoSource =
-    typeof globalThis !== "undefined" && typeof globalThis.crypto !== "undefined"
-      ? globalThis.crypto
-      : undefined;
-
-  if (cryptoSource && typeof cryptoSource.getRandomValues === "function") {
-    cryptoSource.getRandomValues(randomValues);
-    return Array.from(randomValues, (value) => characters[value % characters.length]).join("");
-  }
-
-  let password = "";
-  for (let index = 0; index < length; index += 1) {
-    const randomIndex = Math.floor(Math.random() * characters.length);
-    password += characters[randomIndex];
-  }
-  return password;
-}
-
 export function AdminConsolePage() {
   const { user } = useAuth();
   const { data, loading, error, refetch } = useQuery<AdminConsoleData>(ADMIN_CONSOLE_QUERY);
@@ -424,6 +403,10 @@ export function AdminConsolePage() {
       }
     | null
   >(null);
+  const [resetUserPasswordMutation] = useMutation(RESET_USER_PASSWORD_MUTATION);
+  const [resettingUserId, setResettingUserId] = useState<string | null>(null);
+  const [userActionMessage, setUserActionMessage] = useState<string | null>(null);
+  const [userActionError, setUserActionError] = useState<string | null>(null);
 
   const [fetchLinks, { data: linkData, loading: linksLoading, refetch: refetchLinks }] =
     useLazyQuery<UserProjectLinksData>(USER_LINKS_QUERY);
@@ -460,6 +443,24 @@ export function AdminConsolePage() {
     { label: "Projects", value: projects.length, caption: "Curated workstreams" },
     { label: "Platform Users", value: users.length, caption: "Provisioned teammates" },
   ];
+
+  const handleResetPassword = async (userId: string, email: string) => {
+    setUserActionMessage(null);
+    setUserActionError(null);
+    setResettingUserId(userId);
+    try {
+      await resetUserPasswordMutation({
+        variables: { input: { userId } },
+      });
+      setUserActionMessage(`Password reset email sent to ${email}.`);
+    } catch (mutationError) {
+      const message =
+        mutationError instanceof Error ? mutationError.message : "Failed to reset password.";
+      setUserActionError(message);
+    } finally {
+      setResettingUserId(null);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-8 lg:flex-row">
@@ -697,6 +698,8 @@ export function AdminConsolePage() {
               </div>
             }
           />
+          {userActionError ? <InlineMessage tone="error">{userActionError}</InlineMessage> : null}
+          {userActionMessage ? <InlineMessage>{userActionMessage}</InlineMessage> : null}
           {loading ? (
             <EmptyState message="Loading users..." />
           ) : users.length === 0 ? (
@@ -711,6 +714,7 @@ export function AdminConsolePage() {
                     <th className="px-4 py-3 font-semibold">Role</th>
                     <th className="px-4 py-3 font-semibold">Phone</th>
                     <th className="px-4 py-3 font-semibold">Joined</th>
+                    <th className="px-4 py-3 font-semibold text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
@@ -733,6 +737,19 @@ export function AdminConsolePage() {
                       </td>
                       <td className="px-4 py-3 text-slate-500 dark:text-slate-400">
                         {formatDate(entry.createdAt)}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={resettingUserId === entry.id}
+                          onClick={() => {
+                            void handleResetPassword(entry.id, entry.email);
+                          }}
+                        >
+                          {resettingUserId === entry.id ? "Sending…" : "Reset password"}
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -1213,7 +1230,6 @@ function CreateUserModal({
   const [displayName, setDisplayName] = useState("");
   const [role, setRole] = useState<"ADMIN" | "MANAGER" | "USER">("USER");
   const [phone, setPhone] = useState("");
-  const [password, setPassword] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [createUser, { loading }] = useMutation(CREATE_USER_MUTATION);
 
@@ -1223,7 +1239,6 @@ function CreateUserModal({
       setDisplayName("");
       setRole("USER");
       setPhone("");
-      setPassword("");
       setMessage(null);
     }
   }, [open]);
@@ -1236,9 +1251,9 @@ function CreateUserModal({
         input: {
           email,
           displayName,
-          password,
           role,
           phone: phone || null,
+          sendInvite: true,
         },
       },
       onCompleted,
@@ -1253,7 +1268,7 @@ function CreateUserModal({
       open={open}
       onClose={onClose}
       title="Invite platform user"
-      description="Share the temporary password securely. Users will rotate their credentials on first sign-in once self-service is enabled."
+      description="An invitation email with a temporary password will be sent automatically."
     >
       <form className="space-y-4" onSubmit={handleSubmit}>
         <Input
@@ -1277,13 +1292,6 @@ function CreateUserModal({
           onChange={setPhone}
           placeholder="+1 555 0100"
           type="tel"
-        />
-        <Input
-          label="Temporary password"
-          value={password}
-          onChange={setPassword}
-          placeholder="Generate a strong passphrase"
-          required
         />
         <label className="flex flex-col gap-2 text-sm text-slate-600 dark:text-slate-300">
           <span className="font-medium text-slate-700 dark:text-slate-200">Role</span>
@@ -1342,7 +1350,6 @@ function ImportUsersModal({
     useLazyQuery<ProjectUserOptionsData>(PROJECT_USERS_OPTIONS_QUERY);
   const [createUser] = useMutation(CREATE_USER_MUTATION);
   const [mapUser] = useMutation(MAP_USER_MUTATION);
-  const [sendInvite] = useMutation(SEND_INVITE_EMAIL_MUTATION);
 
   const projectOptionsForSite = useMemo(
     () => projects.filter((project) => project.siteId === siteId),
@@ -1505,8 +1512,6 @@ function ImportUsersModal({
         errors.push(`${row.displayName} requires an email address.`);
         continue;
       }
-      const password = generateTemporaryPassword();
-
       let createdUserId: string | null = null;
       try {
         const response = await createUser({
@@ -1514,9 +1519,9 @@ function ImportUsersModal({
             input: {
               email: row.email.trim(),
               displayName: row.displayName.trim() || accountId,
-              password,
               phone: row.phone.trim() ? row.phone.trim() : null,
               role: row.role,
+              sendInvite: sendEmails,
             },
           },
         });
@@ -1540,23 +1545,6 @@ function ImportUsersModal({
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : "Failed to map user to project.";
-          errors.push(`${row.displayName || accountId}: ${message}`);
-        }
-      }
-
-      if (sendEmails) {
-        try {
-          await sendInvite({
-            variables: {
-              input: {
-                email: row.email.trim(),
-                displayName: row.displayName.trim() || accountId,
-                temporaryPassword: password,
-              },
-            },
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "Failed to send invite email.";
           errors.push(`${row.displayName || accountId}: ${message}`);
         }
       }
