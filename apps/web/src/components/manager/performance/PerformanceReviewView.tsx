@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { gql, useLazyQuery, useQuery } from "@apollo/client";
+import { gql, useQuery } from "@apollo/client";
 import { Loader2, RefreshCcw, Sparkles, TrendingUp, Users, AlertTriangle, Save } from "lucide-react";
 import { Button } from "../../ui/button";
 import { useAuth } from "../../../providers/AuthProvider";
@@ -10,14 +10,32 @@ interface ScrumProject {
   id: string;
   key: string;
   name: string;
+  trackedUsers: ProjectTrackedUser[];
 }
 
 interface ProjectTrackedUser {
   id: string;
   displayName: string;
+  jiraAccountId: string | null;
   email?: string | null;
   avatarUrl?: string | null;
   isTracked: boolean;
+}
+
+interface AggregatedMemberEntry {
+  projectId: string;
+  projectKey: string;
+  projectName: string;
+  trackedUserId: string;
+}
+
+interface AggregatedMemberOption {
+  key: string;
+  label: string;
+  email?: string | null;
+  avatarUrl?: string | null;
+  jiraAccountId: string | null;
+  entries: AggregatedMemberEntry[];
 }
 
 const SCRUM_PROJECTS_QUERY = gql`
@@ -26,18 +44,14 @@ const SCRUM_PROJECTS_QUERY = gql`
       id
       key
       name
-    }
-  }
-`;
-
-const PROJECT_TRACKED_USERS_QUERY = gql`
-  query ProjectTrackedUsersForPerformance($projectId: ID!) {
-    projectTrackedUsers(projectId: $projectId) {
-      id
-      displayName
-      email
-      avatarUrl
-      isTracked
+      trackedUsers {
+        id
+        displayName
+        jiraAccountId
+        email
+        avatarUrl
+        isTracked
+      }
     }
   }
 `;
@@ -109,6 +123,160 @@ function TimelineBar({ date, hours, max }: { date: string; hours: number; max: n
       </div>
     </div>
   );
+}
+
+function computeStdDev(values: number[]): number {
+  if (!values.length) {
+    return 0;
+  }
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
+  return Number(Math.sqrt(variance).toFixed(2));
+}
+
+function combinePerformanceMetrics(
+  metricsList: PerformanceMetrics[],
+  member: AggregatedMemberOption,
+): PerformanceMetrics {
+  if (!metricsList.length) {
+    throw new Error("combinePerformanceMetrics requires at least one metric snapshot");
+  }
+
+  const start = metricsList.reduce((min, metric) => (metric.range.start < min ? metric.range.start : min), metricsList[0].range.start);
+  const end = metricsList.reduce((max, metric) => (metric.range.end > max ? metric.range.end : max), metricsList[0].range.end);
+  const startDate = new Date(start);
+  const endDate = new Date(end);
+  const days = Math.max(1, Math.round((endDate.getTime() - startDate.getTime()) / 86_400_000) + 1);
+
+  const committed = metricsList.reduce((sum, metric) => sum + metric.productivity.storyCompletion.committed, 0);
+  const completed = metricsList.reduce((sum, metric) => sum + metric.productivity.storyCompletion.completed, 0);
+  const ratio = committed === 0 ? null : Math.round((completed / committed) * 100);
+
+  const totalResolved = metricsList.reduce((sum, metric) => sum + metric.productivity.velocity.totalResolved, 0);
+  const weeklyMap = new Map<string, number>();
+  metricsList.forEach((metric) =>
+    metric.productivity.velocity.weekly.forEach((entry) => {
+      weeklyMap.set(entry.weekStart, (weeklyMap.get(entry.weekStart) ?? 0) + entry.resolved);
+    }),
+  );
+  const weekly = Array.from(weeklyMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([weekStart, resolved]) => ({ weekStart, resolved }));
+
+  const dailyMap = new Map<string, number>();
+  metricsList.forEach((metric) =>
+    metric.productivity.workConsistency.daily.forEach((entry) => {
+      dailyMap.set(entry.date, Number((dailyMap.get(entry.date) ?? 0) + entry.hours));
+    }),
+  );
+  const daily = Array.from(dailyMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, hours]) => ({ date, hours }));
+  const totalHours = daily.reduce((sum, entry) => sum + entry.hours, 0);
+  const averageHours = daily.length ? Number((totalHours / daily.length).toFixed(2)) : 0;
+  const stdDevHours = computeStdDev(daily.map((entry) => entry.hours));
+
+  const reopenCount = metricsList.reduce((sum, metric) => sum + metric.quality.reopenCount, 0);
+  const bugCount = metricsList.reduce((sum, metric) => sum + metric.quality.bugCount, 0);
+  const resolvedBlockers = metricsList.reduce((sum, metric) => sum + metric.quality.blockerOwnership.resolved, 0);
+  const activeBlockers = metricsList.reduce((sum, metric) => sum + metric.quality.blockerOwnership.active, 0);
+
+  const reviewHighlights = Array.from(
+    new Set(metricsList.flatMap((metric) => metric.quality.reviewHighlights)),
+  );
+
+  const commentsAuthored = metricsList.reduce((sum, metric) => sum + metric.collaboration.commentsAuthored, 0);
+  const mentionsReceived = metricsList.reduce((sum, metric) => sum + metric.collaboration.mentionsReceived, 0);
+  const crossTeamLinks = metricsList.reduce((sum, metric) => sum + metric.collaboration.crossTeamLinks, 0);
+  const peersInteractedWith = metricsList.reduce(
+    (sum, metric) => sum + metric.collaboration.peersInteractedWith,
+    0,
+  );
+
+  const latencyValues = metricsList
+    .map((metric) => metric.collaboration.responseLatencyHours)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+
+  const responseLatencyHours =
+    latencyValues.length > 0
+      ? Number(
+          (
+            latencyValues.reduce((sum, value) => sum + value, 0) / latencyValues.length
+          ).toFixed(2),
+        )
+      : null;
+
+  const warningsMap = new Map<string, { code: string; message: string }>();
+  metricsList.forEach((metric) =>
+    metric.warnings.forEach((warning) =>
+      warningsMap.set(`${warning.code}:${warning.message}`, warning),
+    ),
+  );
+  warningsMap.set("PORTFOLIO_VIEW:Aggregated across the selected teammate's projects.", {
+    code: "PORTFOLIO_VIEW",
+    message: "Aggregated across the selected teammate's projects.",
+  });
+  const warnings = Array.from(warningsMap.values());
+
+  return {
+    range: {
+      start,
+      end,
+      days,
+    },
+    trackedUser: {
+      id: member.key,
+      displayName: member.label,
+      avatarUrl: member.avatarUrl ?? metricsList[0].trackedUser.avatarUrl ?? null,
+      jiraAccountId: member.jiraAccountId ?? metricsList[0].trackedUser.jiraAccountId,
+    },
+    project: {
+      id: "portfolio",
+      key: "ALL",
+      name: "All Projects",
+    },
+    productivity: {
+      storyCompletion: {
+        committed,
+        completed,
+        ratio,
+      },
+      velocity: {
+        totalResolved,
+        weekly,
+      },
+      workConsistency: {
+        totalHours: Number(totalHours.toFixed(2)),
+        averageHours,
+        stdDevHours,
+        daily,
+      },
+      predictability: {
+        ratio,
+      },
+    },
+    quality: {
+      reopenCount,
+      bugCount,
+      blockerOwnership: {
+        resolved: resolvedBlockers,
+        active: activeBlockers,
+      },
+      reviewHighlights,
+    },
+    collaboration: {
+      commentsAuthored,
+      mentionsReceived,
+      crossTeamLinks,
+      responseLatencyHours,
+      peersInteractedWith,
+    },
+    notes: {
+      markdown: null,
+      lastUpdated: null,
+    },
+    warnings,
+  };
 }
 
 function SummarySection({
@@ -275,7 +443,7 @@ export function PerformanceReviewView() {
   const { token } = useAuth();
   const defaultRange = useMemo(() => getDefaultRange(), []);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [selectedMemberKey, setSelectedMemberKey] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState<{ start: string; end: string }>(defaultRange);
 
   const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
@@ -299,42 +467,87 @@ export function PerformanceReviewView() {
   });
 
   const projects = useMemo(() => projectsData?.scrumProjects ?? [], [projectsData]);
+  const aggregatedMembers = useMemo<AggregatedMemberOption[]>(() => {
+    const map = new Map<string, AggregatedMemberOption>();
+    for (const project of projects) {
+      for (const user of project.trackedUsers ?? []) {
+        if (!user.isTracked) {
+          continue;
+        }
+        const key = user.jiraAccountId ?? `${project.id}:${user.id}`;
+        const label = user.displayName || user.email || user.jiraAccountId || "Unnamed teammate";
+        const existing = map.get(key);
+        const option: AggregatedMemberOption =
+          existing ??
+          {
+            key,
+            label,
+            email: user.email ?? null,
+            avatarUrl: user.avatarUrl ?? null,
+            jiraAccountId: user.jiraAccountId,
+            entries: [],
+          };
+        option.entries.push({
+          projectId: project.id,
+          projectKey: project.key,
+          projectName: project.name,
+          trackedUserId: user.id,
+        });
+        map.set(key, option);
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
+  }, [projects]);
+  const memberOptions = useMemo<AggregatedMemberOption[]>(() => {
+    if (!aggregatedMembers.length) {
+      return [];
+    }
+    return aggregatedMembers
+      .map((option) => {
+        const scopedEntries = selectedProjectId
+          ? option.entries.filter((entry) => entry.projectId === selectedProjectId)
+          : option.entries;
+        return {
+          ...option,
+          entries: scopedEntries,
+        };
+      })
+      .filter((option) => option.entries.length > 0);
+  }, [aggregatedMembers, selectedProjectId]);
+  const activeMember = useMemo<AggregatedMemberOption | null>(
+    () => memberOptions.find((option) => option.key === selectedMemberKey) ?? null,
+    [memberOptions, selectedMemberKey],
+  );
+  const activeEntries = useMemo<AggregatedMemberEntry[]>(() => {
+    if (!activeMember) {
+      return [];
+    }
+    if (selectedProjectId) {
+      const scoped = activeMember.entries.filter((entry) => entry.projectId === selectedProjectId);
+      return scoped.length ? scoped : activeMember.entries;
+    }
+    return activeMember.entries;
+  }, [activeMember, selectedProjectId]);
 
   useEffect(() => {
     if (!projects.length) {
       setSelectedProjectId(null);
       return;
     }
-    if (!selectedProjectId || !projects.some((project) => project.id === selectedProjectId)) {
-      setSelectedProjectId(projects[0]?.id ?? null);
+    if (selectedProjectId && !projects.some((project) => project.id === selectedProjectId)) {
+      setSelectedProjectId(null);
     }
   }, [projects, selectedProjectId]);
 
-  const [loadTrackedUsers, { data: trackedData, loading: trackedLoading, error: trackedError }] = useLazyQuery<{
-    projectTrackedUsers: ProjectTrackedUser[];
-  }>(PROJECT_TRACKED_USERS_QUERY, {
-    fetchPolicy: "cache-and-network",
-  });
-
   useEffect(() => {
-    if (!selectedProjectId) {
+    if (!memberOptions.length) {
+      setSelectedMemberKey(null);
       return;
     }
-    void loadTrackedUsers({ variables: { projectId: selectedProjectId } });
-  }, [selectedProjectId, loadTrackedUsers]);
-
-  const trackedUsers = useMemo(() => trackedData?.projectTrackedUsers ?? [], [trackedData]);
-
-  useEffect(() => {
-    if (!trackedUsers.length) {
-      setSelectedUserId(null);
-      return;
+    if (!selectedMemberKey || !memberOptions.some((option) => option.key === selectedMemberKey)) {
+      setSelectedMemberKey(memberOptions[0].key);
     }
-    if (!selectedUserId || !trackedUsers.some((user) => user.id === selectedUserId)) {
-      const firstTracked = trackedUsers.find((user) => user.isTracked) ?? trackedUsers[0];
-      setSelectedUserId(firstTracked.id);
-    }
-  }, [trackedUsers, selectedUserId]);
+  }, [memberOptions, selectedMemberKey]);
 
   useEffect(() => {
     setMetrics(null);
@@ -342,22 +555,15 @@ export function PerformanceReviewView() {
     setComparison(null);
     setNotesDraft("");
     setNotesUpdatedAt(null);
-  }, [selectedProjectId, selectedUserId, dateRange.start, dateRange.end]);
+  }, [selectedProjectId, selectedMemberKey, dateRange.start, dateRange.end]);
 
-  const fetchMetrics = useCallback(async () => {
-    if (!token) {
-      setMetricsError("Authentication is required to load performance data.");
-      return;
-    }
-    if (!selectedProjectId || !selectedUserId) {
-      return;
-    }
-    setMetricsLoading(true);
-    setMetricsError(null);
-    try {
+  const isPortfolioView = selectedProjectId === null;
+
+  const fetchMetricsForEntry = useCallback(
+    async (entry: AggregatedMemberEntry): Promise<PerformanceMetrics> => {
       const params = new URLSearchParams({
-        projectId: selectedProjectId,
-        trackedUserId: selectedUserId,
+        projectId: entry.projectId,
+        trackedUserId: entry.trackedUserId,
       });
       if (dateRange.start) {
         params.set("start", dateRange.start);
@@ -365,39 +571,72 @@ export function PerformanceReviewView() {
       if (dateRange.end) {
         params.set("end", dateRange.end);
       }
-      const data = await apiFetch<{ metrics: PerformanceMetrics }>(`/api/performance/metrics?${params.toString()}`, {
-        token,
-      });
-      setMetrics(data.metrics);
-      setNotesDraft(data.metrics.notes.markdown ?? "");
-      setNotesUpdatedAt(data.metrics.notes.lastUpdated);
+      const data = await apiFetch<{ metrics: PerformanceMetrics }>(
+        `/api/performance/metrics?${params.toString()}`,
+        { token: token ?? undefined },
+      );
+      return data.metrics;
+    },
+    [dateRange.end, dateRange.start, token],
+  );
+
+  const fetchMetrics = useCallback(async () => {
+    if (!token) {
+      setMetricsError("Authentication is required to load performance data.");
+      return;
+    }
+    if (!activeMember || !activeEntries.length) {
+      setMetrics(null);
+      setMetricsError(null);
+      return;
+    }
+
+    setMetricsLoading(true);
+    setMetricsError(null);
+    try {
+      if (activeEntries.length === 1) {
+        const metricsSnapshot = await fetchMetricsForEntry(activeEntries[0]);
+        setMetrics(metricsSnapshot);
+        setNotesDraft(metricsSnapshot.notes.markdown ?? "");
+        setNotesUpdatedAt(metricsSnapshot.notes.lastUpdated);
+      } else {
+        const snapshots = await Promise.all(activeEntries.map(fetchMetricsForEntry));
+        const aggregated = combinePerformanceMetrics(snapshots, activeMember);
+        setMetrics(aggregated);
+        setNotesDraft("");
+        setNotesUpdatedAt(null);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to load performance metrics.";
       setMetricsError(message);
+      setMetrics(null);
     } finally {
       setMetricsLoading(false);
     }
-  }, [dateRange.end, dateRange.start, selectedProjectId, selectedUserId, token]);
+  }, [token, activeMember, activeEntries, fetchMetricsForEntry]);
 
   useEffect(() => {
-    if (!selectedProjectId || !selectedUserId || !token) {
+    if (!token || !activeMember || !activeEntries.length) {
       return;
     }
     void fetchMetrics();
-  }, [selectedProjectId, selectedUserId, dateRange.start, dateRange.end, refreshKey, fetchMetrics, token]);
+  }, [token, activeMember, activeEntries, fetchMetrics, dateRange.start, dateRange.end, refreshKey]);
 
   const fetchSummary = useCallback(async () => {
-    if (!token || !selectedProjectId || !selectedUserId) {
+    if (!token || isPortfolioView || !activeEntries.length) {
+      setSummary(null);
       return;
     }
+
     setSummaryLoading(true);
     try {
+      const entry = activeEntries[0];
       const payload = await apiFetch<{ summary: PerformanceSummary }>("/api/performance/summary", {
         method: "POST",
-        token,
+        token: token ?? undefined,
         body: JSON.stringify({
-          projectId: selectedProjectId,
-          trackedUserId: selectedUserId,
+          projectId: entry.projectId,
+          trackedUserId: entry.trackedUserId,
           start: dateRange.start,
           end: dateRange.end,
         }),
@@ -414,14 +653,15 @@ export function PerformanceReviewView() {
     } finally {
       setSummaryLoading(false);
     }
-  }, [dateRange.end, dateRange.start, selectedProjectId, selectedUserId, token]);
+  }, [token, isPortfolioView, activeEntries, dateRange.start, dateRange.end]);
 
   useEffect(() => {
-    if (!metrics || !token) {
+    if (!metrics || isPortfolioView) {
+      setSummary(null);
       return;
     }
     void fetchSummary();
-  }, [metrics, fetchSummary, token]);
+  }, [metrics, isPortfolioView, fetchSummary]);
 
   const handleRefreshMetrics = useCallback(async () => {
     setRefreshKey((value) => value + 1);
@@ -429,19 +669,22 @@ export function PerformanceReviewView() {
   }, [fetchMetrics]);
 
   const handleFetchComparison = useCallback(async () => {
-    if (!token || !metrics || !selectedProjectId || !selectedUserId) {
+    if (!token || !metrics || isPortfolioView || !activeEntries.length) {
       return;
     }
+
     const days = metrics.range.days ?? 0;
     const previousRange = computePreviousRange(metrics.range.start, days);
     if (!previousRange) {
       return;
     }
+
     setComparisonLoading(true);
     try {
+      const entry = activeEntries[0];
       const params = new URLSearchParams({
-        projectId: selectedProjectId,
-        trackedUserId: selectedUserId,
+        projectId: entry.projectId,
+        trackedUserId: entry.trackedUserId,
         currentStart: dateRange.start,
         currentEnd: dateRange.end,
         compareStart: previousRange.start,
@@ -449,11 +692,12 @@ export function PerformanceReviewView() {
       });
       const payload = await apiFetch<{ comparison: PerformanceComparison }>(
         `/api/performance/compare?${params.toString()}`,
-        { token },
+        { token: token ?? undefined },
       );
       setComparison(payload.comparison);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to load comparison data.";
+      console.error(message);
       setComparison({
         current: metrics,
         compare: metrics,
@@ -464,29 +708,33 @@ export function PerformanceReviewView() {
           commentsAuthored: 0,
         },
       });
-      console.error(message);
     } finally {
       setComparisonLoading(false);
     }
-  }, [dateRange.end, dateRange.start, metrics, selectedProjectId, selectedUserId, token]);
+  }, [token, metrics, isPortfolioView, activeEntries, dateRange.start, dateRange.end]);
 
   const handleSaveNotes = useCallback(async () => {
-    if (!token || !selectedProjectId || !selectedUserId) {
+    if (!token || isPortfolioView || !activeEntries.length) {
       return;
     }
+
     setNotesSaving(true);
     try {
-      const payload = await apiFetch<{ note: { markdown: string; updatedAt: string } }>("/api/performance/notes", {
-        method: "PUT",
-        token,
-        body: JSON.stringify({
-          projectId: selectedProjectId,
-          trackedUserId: selectedUserId,
-          start: dateRange.start,
-          end: dateRange.end,
-          markdown: notesDraft,
-        }),
-      });
+      const entry = activeEntries[0];
+      const payload = await apiFetch<{ note: { markdown: string; updatedAt: string } }>(
+        "/api/performance/notes",
+        {
+          method: "PUT",
+          token: token ?? undefined,
+          body: JSON.stringify({
+            projectId: entry.projectId,
+            trackedUserId: entry.trackedUserId,
+            start: dateRange.start,
+            end: dateRange.end,
+            markdown: notesDraft,
+          }),
+        },
+      );
       setNotesDraft(payload.note.markdown);
       setNotesUpdatedAt(payload.note.updatedAt);
     } catch (error) {
@@ -494,19 +742,18 @@ export function PerformanceReviewView() {
     } finally {
       setNotesSaving(false);
     }
-  }, [dateRange.end, dateRange.start, notesDraft, selectedProjectId, selectedUserId, token]);
+  }, [token, isPortfolioView, activeEntries, dateRange.start, dateRange.end, notesDraft]);
 
   const projectStatusMessage = useMemo(() => {
     if (projectsError) {
       const graphMessage = projectsError.graphQLErrors?.[0]?.message;
       return graphMessage ?? projectsError.message ?? "Unable to load projects.";
     }
-    if (trackedError) {
-      const graphMessage = trackedError.graphQLErrors?.[0]?.message;
-      return graphMessage ?? trackedError.message ?? "Unable to load tracked users.";
+    if (!projectsLoading && !memberOptions.length) {
+      return "No tracked teammates are available across your projects.";
     }
     return null;
-  }, [projectsError, trackedError]);
+  }, [projectsError, projectsLoading, memberOptions]);
 
   const maxDailyHours = useMemo(() => {
     if (!metrics?.productivity.workConsistency.daily.length) {
@@ -545,7 +792,8 @@ export function PerformanceReviewView() {
               onChange={(event) => setSelectedProjectId(event.target.value || null)}
               disabled={projectsLoading}
             >
-              {projectsLoading ? <option>Loading…</option> : null}
+              <option value="">All Projects</option>
+              {projectsLoading ? <option value="loading">Loading…</option> : null}
               {projects.map((project) => (
                 <option key={project.id} value={project.id}>
                   {project.key} — {project.name}
@@ -560,14 +808,15 @@ export function PerformanceReviewView() {
             </span>
             <select
               className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:border-sky-400 dark:focus:ring-sky-400/40"
-              value={selectedUserId ?? ""}
-              onChange={(event) => setSelectedUserId(event.target.value || null)}
-              disabled={trackedLoading}
+              value={selectedMemberKey ?? ""}
+              onChange={(event) => setSelectedMemberKey(event.target.value || null)}
+              disabled={projectsLoading || !memberOptions.length}
             >
-              {trackedLoading ? <option>Loading…</option> : null}
-              {trackedUsers.map((user) => (
-                <option key={user.id} value={user.id}>
-                  {user.displayName}
+              {projectsLoading ? <option value="loading">Loading…</option> : null}
+              {memberOptions.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                  {selectedProjectId ? "" : ` • ${option.entries.length} project${option.entries.length === 1 ? "" : "s"}`}
                 </option>
               ))}
             </select>
@@ -740,7 +989,13 @@ export function PerformanceReviewView() {
             </div>
           </section>
 
-          <SummarySection summary={summary} loading={summaryLoading} onRefresh={fetchSummary} />
+          {!isPortfolioView ? (
+            <SummarySection summary={summary} loading={summaryLoading} onRefresh={fetchSummary} />
+          ) : (
+            <div className="rounded-3xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300">
+              Switch to a specific project to generate an AI narrative for this teammate.
+            </div>
+          )}
 
           <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/60 dark:border-slate-800 dark:bg-slate-950/40 dark:shadow-slate-950/50">
             <div className="flex items-center justify-between gap-3">
@@ -755,7 +1010,8 @@ export function PerformanceReviewView() {
                 size="sm"
                 variant="outline"
                 onClick={() => void handleSaveNotes()}
-                disabled={notesSaving}
+                disabled={notesSaving || isPortfolioView}
+                title={isPortfolioView ? "Select a specific project to capture notes." : undefined}
               >
                 {notesSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                 Save Notes
@@ -766,16 +1022,27 @@ export function PerformanceReviewView() {
               rows={6}
               value={notesDraft}
               onChange={(event) => setNotesDraft(event.target.value)}
+              disabled={isPortfolioView}
               placeholder="Add highlights, goals, or follow-ups for this person."
             />
-            {notesUpdatedAt ? (
+            {isPortfolioView ? (
+              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                Notes are available when a specific project is selected.
+              </p>
+            ) : notesUpdatedAt ? (
               <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
                 Last saved {formatDateLabel(notesUpdatedAt)}
               </p>
             ) : null}
           </section>
 
-          <ComparisonSection comparison={comparison} loading={comparisonLoading} onRefresh={handleFetchComparison} />
+          {!isPortfolioView ? (
+            <ComparisonSection comparison={comparison} loading={comparisonLoading} onRefresh={handleFetchComparison} />
+          ) : (
+            <div className="rounded-3xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300">
+              Select a specific project to benchmark the current window against a prior period.
+            </div>
+          )}
         </>
       ) : null}
 
@@ -784,7 +1051,7 @@ export function PerformanceReviewView() {
           <Users className="h-10 w-10 text-slate-400 dark:text-slate-600" />
           <div className="max-w-xl space-y-2">
             <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-              Choose a project, teammate, and range to analyze.
+              Choose a teammate and timeframe to analyze.
             </h3>
             <p className="text-sm">
               Performance Review Mode surfaces productivity, quality, and collaboration signals once a tracked teammate

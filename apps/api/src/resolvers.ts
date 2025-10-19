@@ -157,10 +157,24 @@ export const resolvers = {
     },
     scrumProjects: async (_parent: unknown, _args: unknown, ctx: RequestContext) => {
       const auth = requireUser(ctx);
+      const projectInclude = {
+        trackedUsers: {
+          where: { isTracked: true },
+          select: {
+            id: true,
+            displayName: true,
+            jiraAccountId: true,
+            email: true,
+            avatarUrl: true,
+            isTracked: true,
+          },
+        },
+      } as const;
       if (auth.role === "ADMIN") {
         return ctx.prisma.jiraProject.findMany({
           where: { isActive: true },
           orderBy: { name: "asc" },
+          include: projectInclude,
         });
       }
 
@@ -172,6 +186,7 @@ export const resolvers = {
           },
         },
         orderBy: { name: "asc" },
+        include: projectInclude,
       });
     },
     focusBoard: async (
