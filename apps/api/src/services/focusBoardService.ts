@@ -3,7 +3,6 @@ import type { Comment, Issue, JiraProject, JiraSite, JiraUser, PrismaClient, Wor
 
 const BLOCKER_STATUS_KEYWORDS = ["block", "blocked", "imped", "hold", "waiting"];
 const IN_PROGRESS_STATUS_KEYWORDS = ["progress", "doing", "active", "review", "selected"];
-const CURRENT_ASSIGNMENT_LOOKBACK_DAYS = 30;
 
 export interface FocusBoardFilters {
   projectIds?: string[] | null;
@@ -150,7 +149,6 @@ export async function buildFocusBoard(
   filters: FocusBoardFilters,
 ): Promise<FocusBoardResult> {
   const { start, end, days } = normalizeDateRange(filters.start, filters.end);
-  const assignmentWindowStart = start.minus({ days: CURRENT_ASSIGNMENT_LOOKBACK_DAYS });
 
   const projectLinks = await prisma.userProjectLink.findMany({
     where: { userId },
@@ -207,7 +205,8 @@ export async function buildFocusBoard(
             accountId: { in: accountIds },
           },
           jiraUpdatedAt: {
-            gte: assignmentWindowStart.toJSDate(),
+            gte: start.toJSDate(),
+            lte: end.toJSDate(),
           },
         },
         {
@@ -311,6 +310,10 @@ export async function buildFocusBoard(
       return await prisma.comment.findMany({
         where: {
           issueId: { in: issues.map((issue) => issue.id) },
+          jiraCreatedAt: {
+            gte: start.toJSDate(),
+            lte: end.toJSDate(),
+          },
         },
         include: {
           issue: {
@@ -392,6 +395,10 @@ export async function buildFocusBoard(
       return await prisma.worklog.findMany({
         where: {
           issueId: { in: issues.map((issue) => issue.id) },
+          jiraStartedAt: {
+            gte: start.toJSDate(),
+            lte: end.toJSDate(),
+          },
         },
         include: {
           issue: {
