@@ -316,20 +316,18 @@ export const typeDefs = gql`
   input CreateUserInput {
     email: String!
     displayName: String!
-    password: String!
     phone: String
     role: Role = USER
-  }
-
-  input UserInviteEmailInput {
-    email: String!
-    displayName: String!
-    temporaryPassword: String!
+    sendInvite: Boolean = true
   }
 
   input UpdateUserRoleInput {
     userId: ID!
     role: Role!
+  }
+
+  input ResetUserPasswordInput {
+    userId: ID!
   }
 
   input RegisterJiraSiteInput {
@@ -386,7 +384,7 @@ export const typeDefs = gql`
     syncStates(projectId: ID!): [SyncState!]!
     syncLogs(projectId: ID!, limit: Int = 50): [SyncLog!]!
     projectSprints(projectId: ID!): [Sprint!]!
-    managerSummary(projectId: ID!, sprintId: ID): ManagerSummary!
+    managerSummary(projectId: ID, sprintId: ID): ManagerSummary!
   }
 
   type JiraProjectOption {
@@ -427,7 +425,7 @@ export const typeDefs = gql`
   type Mutation {
     login(input: LoginInput!): AuthPayload!
     createUser(input: CreateUserInput!): User!
-    sendUserInviteEmail(input: UserInviteEmailInput!): Boolean!
+    resetUserPassword(input: ResetUserPasswordInput!): Boolean!
     updateUserRole(input: UpdateUserRoleInput!): User!
     registerJiraSite(input: RegisterJiraSiteInput!): JiraSite!
     registerJiraProject(input: RegisterJiraProjectInput!): JiraProject!

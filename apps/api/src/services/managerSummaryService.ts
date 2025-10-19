@@ -1,12 +1,5 @@
 import { DateTime } from "luxon";
-import type {
-  Issue,
-  JiraProject,
-  JiraUser,
-  PrismaClient,
-  Role,
-  Sprint,
-} from "@prisma/client";
+import type { Issue, JiraProject, JiraUser, PrismaClient, Role, Sprint } from "@prisma/client";
 
 const DONE_STATUS_KEYWORDS = ["done", "closed", "resolved", "complete", "completed", "cancelled"];
 const BLOCKER_STATUS_KEYWORDS = ["block", "blocked", "imped", "hold", "waiting", "stuck"];
@@ -435,5 +428,149 @@ export async function buildManagerSummary(
     aiSummary,
     warnings,
     updatedAt: new Date(),
+  };
+}
+
+function mergeRiskLevels(
+  summaries: ManagerSummaryResult[],
+): { level: string; reason: string | null } {
+  const rank: Record<string, number> = {
+    HIGH: 4,
+    MEDIUM: 3,
+    LOW: 2,
+    UNKNOWN: 1,
+  };
+
+  let top: { level: string; reason: string | null } | null = null;
+  let topScore = -1;
+
+  for (const summary of summaries) {
+    const { riskLevel, riskReason } = summary.totals;
+    const score = rank[riskLevel] ?? 0;
+    if (score > topScore) {
+      topScore = score;
+      top = { level: riskLevel, reason: riskReason };
+    }
+  }
+
+  return top ?? { level: "UNKNOWN", reason: null };
+}
+
+export async function buildPortfolioManagerSummary(
+  prisma: PrismaClient,
+  manager: ManagerIdentity,
+  projectIds: string[],
+): Promise<ManagerSummaryResult> {
+  const uniqueIds = Array.from(new Set(projectIds)).filter(Boolean);
+  if (!uniqueIds.length) {
+    const error = new Error("No projects available");
+    (error as Error & { statusCode?: number }).statusCode = 404;
+    throw error;
+  }
+
+  const summaries = (
+    await Promise.all(
+      uniqueIds.map(async (projectId) => {
+        try {
+          return await buildManagerSummary(prisma, manager, { projectId, sprintId: null });
+        } catch (error) {
+          console.error("[ManagerSummary] Failed to build project summary", {
+            managerId: manager.id,
+            projectId,
+            error,
+          });
+          return null;
+        }
+      }),
+    )
+  ).filter((value): value is ManagerSummaryResult => value !== null);
+
+  if (!summaries.length) {
+    const error = new Error("Unable to assemble portfolio summary");
+    (error as Error & { statusCode?: number }).statusCode = 500;
+    throw error;
+  }
+
+  const committedIssues = summaries.reduce((total, summary) => total + summary.totals.committedIssues, 0);
+  const completedIssues = summaries.reduce((total, summary) => total + summary.totals.completedIssues, 0);
+  const activeBlockers = summaries.reduce((total, summary) => total + summary.totals.activeBlockers, 0);
+  const velocitySum = summaries.reduce((total, summary) => total + summary.totals.velocity, 0);
+  const timeProgressValues = summaries
+    .map((summary) => summary.totals.timeProgressPercent)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+
+  const completionPercent =
+    committedIssues > 0 ? Number(((completedIssues / committedIssues) * 100).toFixed(1)) : null;
+  const velocity = Number(velocitySum.toFixed(2));
+  const timeProgressPercent =
+    timeProgressValues.length > 0
+      ? Number(
+          (
+            timeProgressValues.reduce((total, value) => total + value, 0) / timeProgressValues.length
+          ).toFixed(1),
+        )
+      : null;
+
+  const { level: aggregatedRiskLevel, reason: aggregatedRiskReason } = mergeRiskLevels(summaries);
+
+  const totals: ManagerSummaryTotals = {
+    committedIssues,
+    completedIssues,
+    completionPercent,
+    velocity,
+    activeBlockers,
+    riskLevel: aggregatedRiskLevel,
+    riskReason: aggregatedRiskReason,
+    timeProgressPercent,
+  };
+
+  const kpis = buildKpis(totals);
+  const blockers = summaries.flatMap((summary) => summary.blockers);
+  const warnings = summaries.flatMap((summary) => summary.warnings);
+  if (summaries.length < uniqueIds.length) {
+    warnings.push({
+      code: "PROJECT_SUMMARY_UNAVAILABLE",
+      message: "Some projects could not be included due to data issues or access restrictions.",
+    });
+  }
+
+  const rangeStarts = summaries
+    .map((summary) => DateTime.fromISO(summary.range.start, { zone: "utc" }))
+    .filter((dt) => dt.isValid);
+  const rangeEnds = summaries
+    .map((summary) => DateTime.fromISO(summary.range.end, { zone: "utc" }))
+    .filter((dt) => dt.isValid);
+
+  const resolvedStartCandidate = rangeStarts.length > 0 ? DateTime.min(...rangeStarts) : null;
+  const resolvedEndCandidate = rangeEnds.length > 0 ? DateTime.max(...rangeEnds) : null;
+
+  const resolvedStart = (resolvedStartCandidate && resolvedStartCandidate.isValid
+    ? resolvedStartCandidate
+    : DateTime.utc().minus({ days: 13 }).startOf("day")
+  ).startOf("day");
+  const resolvedEnd = (resolvedEndCandidate && resolvedEndCandidate.isValid
+    ? resolvedEndCandidate
+    : DateTime.utc().endOf("day")
+  ).endOf("day");
+
+  const summaryUpdatedAt = new Date();
+
+  return {
+    project: {
+      id: "all-projects",
+      key: "ALL",
+      name: "All Projects",
+    },
+    sprint: null,
+    range: {
+      start: resolvedStart.toISODate() ?? resolvedStart.toISO() ?? resolvedStart.toFormat("yyyy-LL-dd"),
+      end: resolvedEnd.toISODate() ?? resolvedEnd.toISO() ?? resolvedEnd.toFormat("yyyy-LL-dd"),
+    },
+    totals,
+    kpis,
+    blockers,
+    aiSummary: null,
+    warnings,
+    updatedAt: summaryUpdatedAt,
   };
 }

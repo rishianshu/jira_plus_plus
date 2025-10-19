@@ -1,6 +1,6 @@
+import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import crypto from "node:crypto";
 import type { IncomingMessage } from "http";
 import { CredentialType, type Role, type User } from "@prisma/client";
 import { prisma } from "./prisma.js";
@@ -9,6 +9,8 @@ import type { AuthenticatedUser } from "./context.js";
 
 const TOKEN_EXPIRES_IN = "12h";
 const BCRYPT_ROUNDS = 12;
+const PASSWORD_ALPHABET =
+  "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz0123456789!@#$%&*?";
 
 interface JwtPayload extends jwt.JwtPayload {
   sub: string;
@@ -49,6 +51,20 @@ export function verifyAuthToken(token: string): JwtPayload | null {
 
 function deriveEncryptionKey(secret: string): Buffer {
   return crypto.createHash("sha256").update(secret).digest();
+}
+
+export function generateTemporaryPassword(length = 16): string {
+  if (length <= 0) {
+    throw new Error("Password length must be positive");
+  }
+
+  const bytes = crypto.randomBytes(length);
+  let password = "";
+  for (let index = 0; index < length; index += 1) {
+    const charIndex = bytes[index] % PASSWORD_ALPHABET.length;
+    password += PASSWORD_ALPHABET.charAt(charIndex);
+  }
+  return password;
 }
 
 export function encryptSecret(value: string): string {

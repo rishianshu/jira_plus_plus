@@ -41,7 +41,7 @@ const PROJECT_SPRINTS_QUERY = gql`
 `;
 
 const MANAGER_SUMMARY_QUERY = gql`
-  query ManagerSummary($projectId: ID!, $sprintId: ID) {
+  query ManagerSummary($projectId: ID, $sprintId: ID) {
     managerSummary(projectId: $projectId, sprintId: $sprintId) {
       project {
         id
@@ -211,7 +211,7 @@ export function ManagerSummaryView() {
       setSelectedProjectId(null);
       return;
     }
-    if (!selectedProjectId || !projects.some((project) => project.id === selectedProjectId)) {
+    if (selectedProjectId && !projects.some((project) => project.id === selectedProjectId)) {
       setSelectedProjectId(projects[0]?.id ?? null);
     }
   }, [projects, selectedProjectId]);
@@ -244,20 +244,21 @@ export function ManagerSummaryView() {
     }
   }, [sprints, selectedSprintId, selectedProjectId]);
 
+  const summaryVariables = useMemo(
+    () => ({
+      projectId: selectedProjectId,
+      sprintId: selectedProjectId ? selectedSprintId || null : null,
+    }),
+    [selectedProjectId, selectedSprintId],
+  );
+
   const {
     data: summaryData,
     loading: summaryLoading,
     error: summaryError,
     refetch: refetchSummary,
   } = useQuery<{ managerSummary: ManagerSummary }>(MANAGER_SUMMARY_QUERY, {
-    variables:
-      selectedProjectId
-        ? {
-            projectId: selectedProjectId,
-            sprintId: selectedSprintId || null,
-          }
-        : undefined,
-    skip: !selectedProjectId,
+    variables: summaryVariables,
     fetchPolicy: "cache-and-network",
   });
 
@@ -319,10 +320,15 @@ export function ManagerSummaryView() {
             <select
               className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:border-sky-400 dark:focus:ring-sky-400/40"
               value={selectedProjectId ?? ""}
-              onChange={(event) => setSelectedProjectId(event.target.value || null)}
+              onChange={(event) => {
+                const next = event.target.value;
+                setSelectedProjectId(next === "" ? null : next);
+                setSelectedSprintId(null);
+              }}
               disabled={projectsLoading}
             >
-              {projectsLoading ? <option>Loading…</option> : null}
+              <option value="">All Projects</option>
+              {projectsLoading ? <option value="loading">Loading…</option> : null}
               {projects.map((project) => (
                 <option key={project.id} value={project.id}>
                   {project.key} — {project.name}
@@ -331,24 +337,35 @@ export function ManagerSummaryView() {
             </select>
           </label>
 
-          <label className="space-y-1 text-sm">
-            <span className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
-              Sprint
-            </span>
-            <select
-              className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:border-sky-400 dark:focus:ring-sky-400/40"
-              value={selectedSprintId ?? ""}
-              onChange={(event) => setSelectedSprintId(event.target.value || null)}
-              disabled={sprintsLoading || !sprints.length}
-            >
-              <option value="">Latest sprint</option>
-              {sprints.map((sprint) => (
-                <option key={sprint.id} value={sprint.id}>
-                  {sprint.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          {selectedProjectId ? (
+            <label className="space-y-1 text-sm">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                Sprint
+              </span>
+              <select
+                className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:border-sky-400 dark:focus:ring-sky-400/40"
+                value={selectedSprintId ?? ""}
+                onChange={(event) => setSelectedSprintId(event.target.value || null)}
+                disabled={sprintsLoading || !sprints.length}
+              >
+                <option value="">Latest sprint</option>
+                {sprints.map((sprint) => (
+                  <option key={sprint.id} value={sprint.id}>
+                    {sprint.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <div className="space-y-1 text-sm">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                Sprint
+              </span>
+              <div className="flex h-10 items-center rounded-2xl border border-slate-200 bg-white px-3 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+                Portfolio view
+              </div>
+            </div>
+          )}
 
           <div className="space-y-1 text-sm">
             <span className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
