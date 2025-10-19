@@ -21,4 +21,4 @@ CREATE UNIQUE INDEX "JiraAssignableUser_siteId_projectKey_accountId_key" ON "Jir
 CREATE INDEX "JiraAssignableUser_siteId_projectKey_idx" ON "JiraAssignableUser"("siteId", "projectKey");
 
 -- AddForeignKey
-ALTER TABLE "JiraAssignableUser" ADD CONSTRAINT "JiraAssignableUser_siteId_fkey" FOREIGN KEY ("siteId") REFERENCES "JiraSite"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "JiraAssignableUser" ADD CONSTRAINT "JiraAssignableUser_siteId_fkey" FOREIGN KEY ("siteId") REFERENCES "JiraSite"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
