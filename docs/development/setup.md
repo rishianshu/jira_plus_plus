@@ -57,6 +57,9 @@ The pre-push hook blocks direct commits on `main`, nudging you back to the PR fl
 - `.env.example` is the canonical template for new developers.
 - Never commit real secrets; use `infra/.env.template` to document runtime
   expectations.
+- UAT/production deployments require SMTP credentials
+  (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_SECURE`,
+  `SMTP_FROM_EMAIL`) so invitation and notification email channels work.
 
 Refer to `specs/deployment/plan.md` and `specs/deployment/ci-cd.md` for the
 deployment story and branching conventions.
