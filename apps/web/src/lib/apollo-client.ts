@@ -1,5 +1,7 @@
-import { ApolloClient, HttpLink, InMemoryCache } from "@apollo/client";
+import { ApolloClient, HttpLink, InMemoryCache, from } from "@apollo/client";
 import { setContext } from "@apollo/client/link/context";
+import { onError } from "@apollo/client/link/error";
+import { emitUnauthorized } from "./auth-events";
 
 export const TOKEN_STORAGE_KEY = "jira-plus-plus/token";
 
@@ -25,8 +27,20 @@ function createApolloClient() {
     };
   });
 
+  const errorLink = onError(({ graphQLErrors, networkError }) => {
+    const unauthenticated =
+      graphQLErrors?.some((error) => error.extensions?.code === "UNAUTHENTICATED") ||
+      (typeof networkError === "object" && networkError !== null && "statusCode" in networkError
+        ? (networkError as { statusCode?: number }).statusCode === 401
+        : false);
+
+    if (unauthenticated) {
+      emitUnauthorized();
+    }
+  });
+
   return new ApolloClient({
-    link: authLink.concat(httpLink),
+    link: from([errorLink, authLink.concat(httpLink)]),
     cache: new InMemoryCache(),
   });
 }
