@@ -1,21 +1,13 @@
 {
   "compilerOptions": {
-    "target": "ES2021",
-    "module": "NodeNext",
-    "lib": ["ES2021", "DOM", "DOM.Iterable"],
-    "moduleResolution": "NodeNext",
-    "allowJs": false,
-    "skipLibCheck": true,
-    "strict": true,
-    "noEmit": false,
-    "esModuleInterop": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "resolveJsonModule": true,
-    "isolatedModules": true,
+    "esModuleInterop": true,
+    "strict": true,
+    "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "allowSyntheticDefaultImports": true,
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["./*"]
-    }
+    "baseUrl": "."
   }
 }
