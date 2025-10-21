@@ -198,9 +198,13 @@ export async function updateNextRunFromSchedule(prisma: PrismaClient, projectId:
   const client = await getTemporalClient();
   const schedule = client.schedule.getHandle(job.scheduleId);
   const description = await schedule.describe();
+  const now = Date.now();
   const nextRun =
     description.info.nextActionTimes && description.info.nextActionTimes.length > 0
-      ? new Date(description.info.nextActionTimes[0])
+      ? description.info.nextActionTimes
+          .map((timestamp) => new Date(timestamp))
+          .filter((date) => Number.isFinite(date.getTime()) && date.getTime() >= now)
+          .sort((a, b) => a.getTime() - b.getTime())[0] ?? null
       : null;
 
   await prisma.syncJob.update({
