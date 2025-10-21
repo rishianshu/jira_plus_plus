@@ -1,3 +1,5 @@
+import { emitUnauthorized } from "./auth-events";
+
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
 const DEFAULT_GRAPHQL_ENDPOINT =
@@ -56,6 +58,9 @@ export async function apiFetch<T>(
   const payload = text ? (JSON.parse(text) as unknown) : null;
 
   if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      emitUnauthorized();
+    }
     const errorMessage =
       (payload && typeof payload === "object" && payload && "error" in (payload as Record<string, unknown>))
         ? String((payload as Record<string, unknown>).error)
