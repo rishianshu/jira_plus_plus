@@ -118,7 +118,7 @@ importers:
         specifier: ^1.4.0
         version: 1.6.1(@types/node@20.19.21)
 
-  apps/web:
+  apps/jira-plus-plus:
     dependencies:
       '@apollo/client':
         specifier: ^3.9.11

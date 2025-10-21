@@ -1,5 +1,5 @@
 {
-  "name": "@jira-plus-plus/web",
+  "name": "@apps/jira-plus-plus",
   "version": "0.1.0",
   "private": true,
   "scripts": {

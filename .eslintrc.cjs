@@ -40,7 +40,7 @@ module.exports = {
       },
     },
     {
-      files: ["apps/web/src/**/*.{ts,tsx}"],
+      files: ["apps/jira-plus-plus/src/**/*.{ts,tsx}"],
       parser: "@typescript-eslint/parser",
       plugins: ["@typescript-eslint", "react", "react-hooks"],
       extends: [
