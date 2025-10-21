@@ -1,9 +1,14 @@
 {
-  "name": "jira-plus-plus",
+  "name": "jira-plus-plus-monorepo",
   "version": "0.1.0",
   "private": true,
-  "packageManager": "pnpm@8.15.3",
+  "packageManager": "pnpm@10.18.2",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
+    "bootstrap": "pnpm -r install && pnpm -r build",
     "dev": "pnpm -r --filter './apps/*' dev",
     "build": "pnpm -r --filter './apps/*' build",
     "lint": "pnpm -r --filter './apps/*' lint",
