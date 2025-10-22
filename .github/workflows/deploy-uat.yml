@@ -18,7 +18,7 @@ jobs:
 
       - uses: pnpm/action-setup@v2
         with:
-          version: 8
+          version: 10
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -33,10 +33,10 @@ jobs:
         run: pnpm --filter ./apps/api prisma generate --schema prisma/schema.prisma
 
       - name: Lint web
-        run: pnpm -r --filter ./apps/web lint
+        run: pnpm -C apps/jira-plus-plus lint
 
       - name: Typecheck web
-        run: pnpm -r --filter ./apps/web typecheck
+        run: pnpm -C apps/jira-plus-plus typecheck
 
       - name: Lint api
         run: pnpm -r --filter ./apps/api lint
@@ -48,13 +48,13 @@ jobs:
         run: pnpm -r --filter ./apps/api test -- --runInBand
 
       - name: Build web
-        run: pnpm -r --filter ./apps/web build
+        run: pnpm -C apps/jira-plus-plus build
 
       - name: Archive web build
         uses: actions/upload-artifact@v4
         with:
           name: web-build
-          path: apps/web/dist
+          path: apps/jira-plus-plus/dist
 
   deploy:
     needs: build-and-test
