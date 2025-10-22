@@ -1,8 +1,20 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["cypress", "node"],
-    "noEmit": true
+    "types": [
+      "cypress",
+      "node"
+    ],
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2022"
+    ]
   },
-  "include": ["./**/*.ts", "./**/*.tsx"]
+  "include": [
+    "./**/*.ts",
+    "./**/*.tsx"
+  ]
 }
