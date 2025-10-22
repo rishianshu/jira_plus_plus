@@ -1,5 +1,5 @@
 import { DateTime } from "luxon";
-import type { Comment, Issue, JiraProject, JiraSite, JiraUser, PrismaClient, Worklog } from "@prisma/client";
+import type { Comment, Issue, JiraProject, JiraSite, JiraUser, PrismaClient, Worklog } from "@platform/cdm";
 
 const BLOCKER_STATUS_KEYWORDS = ["block", "blocked", "imped", "hold", "waiting"];
 const IN_PROGRESS_STATUS_KEYWORDS = ["progress", "doing", "active", "review", "selected"];

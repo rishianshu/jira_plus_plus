@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import type { IncomingMessage } from "http";
-import { CredentialType, type Role, type User } from "@prisma/client";
+import { CredentialType, type Role, type User } from "@platform/cdm";
+import { withTenant } from "@platform/clients";
 import { prisma } from "./prisma.js";
 import { getEnv } from "./env.js";
 import type { AuthenticatedUser } from "./context.js";
@@ -117,9 +118,13 @@ export async function resolveUserFromRequest(
     return null;
   }
 
-  const user = await prisma.user.findUnique({
-    where: { id: payload.sub },
-  });
+  const env = getEnv();
+
+  const user = await withTenant(prisma, env.TENANT_ID, (tx) =>
+    tx.user.findUnique({
+      where: { id: payload.sub },
+    }),
+  );
 
   if (!user) {
     return null;
@@ -134,62 +139,68 @@ export async function resolveUserFromRequest(
 
 export async function seedAdminUser(): Promise<User> {
   const env = getEnv();
+  const tenantId = env.TENANT_ID;
 
-  const existing = await prisma.user.findUnique({
-    where: { email: env.ADMIN_EMAIL },
-    include: { credential: true },
-  });
+  return withTenant(prisma, tenantId, async (tx) => {
+    const existing = await tx.user.findUnique({
+      where: { tenantId_email: { tenantId, email: env.ADMIN_EMAIL } },
+      include: { credential: true },
+    });
 
-  const passwordHash = await hashPassword(env.ADMIN_PASSWORD);
+    const passwordHash = await hashPassword(env.ADMIN_PASSWORD);
 
-  if (!existing) {
-    return prisma.user.create({
-      data: {
-        email: env.ADMIN_EMAIL,
-        displayName: env.ADMIN_DISPLAY_NAME,
-        role: "ADMIN",
-        credential: {
-          create: {
-            type: CredentialType.LOCAL,
-            secretHash: passwordHash,
+    if (!existing) {
+      return tx.user.create({
+        data: {
+          tenantId,
+          email: env.ADMIN_EMAIL,
+          displayName: env.ADMIN_DISPLAY_NAME,
+          role: "ADMIN",
+          credential: {
+            create: {
+              tenantId,
+              type: CredentialType.LOCAL,
+              secretHash: passwordHash,
+            },
           },
         },
-      },
-    });
-  }
-
-  const updates: Partial<User> = {};
-
-  if (existing.role !== "ADMIN") {
-    updates.role = "ADMIN";
-  }
-
-  if (Object.keys(updates).length > 0) {
-    await prisma.user.update({
-      where: { id: existing.id },
-      data: updates,
-    });
-  }
-
-  if (existing.credential) {
-    const isSamePassword = await verifyPassword(env.ADMIN_PASSWORD, existing.credential.secretHash);
-    if (!isSamePassword) {
-      await prisma.credential.update({
-        where: { id: existing.credential.id },
-        data: { secretHash: passwordHash },
       });
     }
-  } else {
-    await prisma.credential.create({
-      data: {
-        type: CredentialType.LOCAL,
-        secretHash: passwordHash,
-        userId: existing.id,
-      },
-    });
-  }
 
-  return prisma.user.findUniqueOrThrow({
-    where: { id: existing.id },
+    const updates: Partial<User> = {};
+
+    if (existing.role !== "ADMIN") {
+      updates.role = "ADMIN";
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await tx.user.update({
+        where: { id: existing.id },
+        data: updates,
+      });
+    }
+
+    if (existing.credential) {
+      const isSamePassword = await verifyPassword(env.ADMIN_PASSWORD, existing.credential.secretHash);
+      if (!isSamePassword) {
+        await tx.credential.update({
+          where: { id: existing.credential.id },
+          data: { secretHash: passwordHash },
+        });
+      }
+    } else {
+      await tx.credential.create({
+        data: {
+          tenantId,
+          type: CredentialType.LOCAL,
+          secretHash: passwordHash,
+          userId: existing.id,
+        },
+      });
+    }
+
+    return tx.user.findUniqueOrThrow({
+      where: { id: existing.id },
+    });
   });
 }

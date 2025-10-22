@@ -1,5 +1,5 @@
 import { GraphQLError } from "graphql";
-import type { PrismaClient, JiraSite } from "@prisma/client";
+import type { PrismaClient, JiraSite } from "@platform/cdm";
 import { decryptSecret } from "./auth.js";
 import { classifyJiraError, type JiraErrorClassification } from "./jira/errorClassifier.js";
 
@@ -8,9 +8,13 @@ export interface JiraSiteAuth {
   token: string;
 }
 
-export async function resolveSiteAuth(prisma: PrismaClient, siteId: string): Promise<JiraSiteAuth> {
-  const site = await prisma.jiraSite.findUnique({
-    where: { id: siteId },
+export async function resolveSiteAuth(
+  prisma: PrismaClient,
+  tenantId: string,
+  siteId: string,
+): Promise<JiraSiteAuth> {
+  const site = await prisma.jiraSite.findFirst({
+    where: { id: siteId, tenantId },
   });
 
   if (!site) {
@@ -50,9 +54,10 @@ export interface JiraUserOption {
 
 export async function fetchJiraProjectOptions(
   prisma: PrismaClient,
+  tenantId: string,
   siteId: string,
 ): Promise<JiraProjectOption[]> {
-  const { site, token } = await resolveSiteAuth(prisma, siteId);
+  const { site, token } = await resolveSiteAuth(prisma, tenantId, siteId);
 
   let response: Response;
   try {
@@ -95,6 +100,7 @@ export async function fetchJiraProjectOptions(
 
 export async function fetchJiraProjectUsers(
   prisma: PrismaClient,
+  tenantId: string,
   siteId: string,
   projectKey: string,
   options: { forceRefresh?: boolean } = {},
@@ -103,7 +109,7 @@ export async function fetchJiraProjectUsers(
 
   if (!options.forceRefresh) {
     const cached = await prisma.jiraAssignableUser.findMany({
-      where: { siteId, projectKey: normalizedKey },
+      where: { tenantId, siteId, projectKey: normalizedKey },
       orderBy: [{ displayName: "asc" as const }, { accountId: "asc" as const }],
     });
     if (cached.length) {
@@ -116,7 +122,7 @@ export async function fetchJiraProjectUsers(
     }
   }
 
-  const { site, token } = await resolveSiteAuth(prisma, siteId);
+  const { site, token } = await resolveSiteAuth(prisma, tenantId, siteId);
 
   const baseUrl = new URL(`${site.baseUrl.replace(/\/$/, "")}/rest/api/3/user/assignable/search`);
   baseUrl.searchParams.set("project", projectKey);
@@ -173,12 +179,15 @@ export async function fetchJiraProjectUsers(
 
   await prisma.$transaction(async (tx) => {
     if (accountIds.length === 0) {
-      await tx.jiraAssignableUser.deleteMany({ where: { siteId, projectKey: normalizedKey } });
+      await tx.jiraAssignableUser.deleteMany({
+        where: { tenantId, siteId, projectKey: normalizedKey },
+      });
       return;
     }
 
     await tx.jiraAssignableUser.deleteMany({
       where: {
+        tenantId,
         siteId,
         projectKey: normalizedKey,
         accountId: { notIn: accountIds },
@@ -189,7 +198,8 @@ export async function fetchJiraProjectUsers(
       users.map((user) =>
         tx.jiraAssignableUser.upsert({
           where: {
-            siteId_projectKey_accountId: {
+            tenantId_siteId_projectKey_accountId: {
+              tenantId,
               siteId,
               projectKey: normalizedKey,
               accountId: user.accountId,
@@ -202,6 +212,7 @@ export async function fetchJiraProjectUsers(
             fetchedAt: new Date(),
           },
           create: {
+            tenantId,
             siteId,
             projectKey: normalizedKey,
             accountId: user.accountId,

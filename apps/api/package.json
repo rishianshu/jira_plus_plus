@@ -16,8 +16,8 @@
   },
   "dependencies": {
     "@apollo/server": "^4.10.0",
+    "@platform/cdm": "workspace:*",
     "@graphql-tools/schema": "^10.0.6",
-    "@prisma/client": "^5.11.0",
     "graphql-tag": "^2.12.6",
     "graphql": "^16.8.1",
     "graphql-scalars": "^1.22.5",

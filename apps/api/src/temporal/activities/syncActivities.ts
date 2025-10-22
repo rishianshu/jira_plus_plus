@@ -1,6 +1,6 @@
 import { DateTime } from "luxon";
 import pRetry, { AbortError } from "p-retry";
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@platform/cdm";
 import { prisma } from "../../prisma.js";
 import {
   resolveSiteAuth,
@@ -109,7 +109,7 @@ export async function prepareProjectSync(
   const trackedAccountIds = trackedUsers.map((user) => user.jiraAccountId);
 
   await ensureSyncJobRecord(prisma, project, trackedAccountIds);
-  await ensureSyncStates(prisma, project.id);
+  await ensureSyncStates(prisma, project.id, project.tenantId);
 
   const states = await prisma.syncState.findMany({
     where: { projectId: project.id },
@@ -154,7 +154,7 @@ export async function prepareProjectSync(
     },
   });
 
-  const { site, token } = await resolveSiteAuth(prisma, project.siteId);
+  const { site, token } = await resolveSiteAuth(prisma, project.tenantId, project.siteId);
 
   return {
     projectId: project.id,
@@ -391,6 +391,7 @@ async function ensureSyncJobRecord(
     const env = getEnv();
     await db.syncJob.create({
       data: {
+        tenantId: project.tenantId,
         projectId: project.id,
         workflowId: `jira-sync-${project.id}`,
         scheduleId: `jira-sync-schedule-${project.id}`,
@@ -419,16 +420,18 @@ async function ensureSyncJobRecord(
   });
 }
 
-async function ensureSyncStates(db: PrismaClient, projectId: string) {
+async function ensureSyncStates(db: PrismaClient, projectId: string, tenantId: string) {
   for (const entity of ENTITY_KEYS) {
     await db.syncState.upsert({
       where: {
-        projectId_entity: {
+        tenantId_projectId_entity: {
+          tenantId,
           projectId,
           entity,
         },
       },
       create: {
+        tenantId,
         projectId,
         entity,
         status: "IDLE",
@@ -439,15 +442,17 @@ async function ensureSyncStates(db: PrismaClient, projectId: string) {
 }
 
 async function upsertIssueFromDetail(projectId: string, detail: any) {
+  const tenantId = getEnv().TENANT_ID;
   const fields = detail.fields ?? {};
-const assigneeId = await upsertJiraUser(fields.assignee, detail.id);
+  const assigneeId = await upsertJiraUser(fields.assignee, tenantId, detail.id);
 
   let sprintId: string | null = null;
   const sprintField = fields.sprint ?? (fields.closedSprints?.[0] ?? null);
   if (sprintField?.id && sprintField?.name) {
     const sprint = await prisma.sprint.upsert({
-      where: { jiraId: sprintField.id },
+      where: { tenantId_jiraId: { tenantId, jiraId: sprintField.id } },
       create: {
+        tenantId,
         jiraId: sprintField.id,
         name: sprintField.name,
         state: sprintField.state ?? "UNKNOWN",
@@ -465,8 +470,14 @@ const assigneeId = await upsertJiraUser(fields.assignee, detail.id);
   }
 
   const issueRecord = await prisma.issue.upsert({
-    where: { jiraId: detail.id },
+    where: {
+      tenantId_jiraId: {
+        tenantId,
+        jiraId: detail.id,
+      },
+    },
     create: {
+      tenantId,
       jiraId: detail.id,
       key: detail.key,
       projectId,
@@ -493,11 +504,17 @@ const assigneeId = await upsertJiraUser(fields.assignee, detail.id);
 
   const comments = detail.fields?.comment?.comments ?? [];
   for (const comment of comments) {
-    const commentAuthorId = await upsertJiraUser(comment.author, comment.id);
+    const commentAuthorId = await upsertJiraUser(comment.author, tenantId, comment.id);
     const commentBody = extractCommentBody(comment);
     await prisma.comment.upsert({
-      where: { jiraId: comment.id },
+      where: {
+        tenantId_jiraId: {
+          tenantId,
+          jiraId: comment.id,
+        },
+      },
       create: {
+        tenantId,
         jiraId: comment.id,
         issueId: issueRecord.id,
         authorId: commentAuthorId,
@@ -516,10 +533,16 @@ const assigneeId = await upsertJiraUser(fields.assignee, detail.id);
 
   const worklogs = detail.fields?.worklog?.worklogs ?? [];
   for (const worklog of worklogs) {
-    const worklogAuthorId = await upsertJiraUser(worklog.author, worklog.id);
+    const worklogAuthorId = await upsertJiraUser(worklog.author, tenantId, worklog.id);
     await prisma.worklog.upsert({
-      where: { jiraId: worklog.id },
+      where: {
+        tenantId_jiraId: {
+          tenantId,
+          jiraId: worklog.id,
+        },
+      },
       create: {
+        tenantId,
         jiraId: worklog.id,
         issueId: issueRecord.id,
         authorId: worklogAuthorId,
@@ -540,14 +563,20 @@ const assigneeId = await upsertJiraUser(fields.assignee, detail.id);
   }
 }
 
-async function upsertJiraUser(user: any, fallbackKey?: string): Promise<string> {
+async function upsertJiraUser(user: any, tenantId: string, fallbackKey?: string): Promise<string> {
   const accountId =
     user?.accountId ??
     (fallbackKey ? `anon-${fallbackKey}` : `anon-${Math.random().toString(36).slice(2)}`);
 
   const record = await prisma.jiraUser.upsert({
-    where: { accountId },
+    where: {
+      tenantId_accountId: {
+        tenantId,
+        accountId,
+      },
+    },
     create: {
+      tenantId,
       accountId,
       displayName: user?.displayName ?? accountId,
       email: user?.emailAddress ?? null,

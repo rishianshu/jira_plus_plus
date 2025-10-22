@@ -8,6 +8,10 @@
     "strict": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "baseUrl": "."
+    "baseUrl": ".",
+    "paths": {
+      "@platform/cdm": ["packages/cdm"],
+      "@platform/clients": ["packages/clients"]
+    }
   }
 }

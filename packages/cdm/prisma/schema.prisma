@@ -1,0 +1,428 @@
+generator client {
+  provider = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id        String   @id @default(uuid())
+  slug      String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users               User[]
+  credentials         Credential[]
+  jiraUsers           JiraUser[]
+  jiraSites           JiraSite[]
+  jiraProjects        JiraProject[]
+  projectTrackedUsers ProjectTrackedUser[]
+  jiraAssignableUsers JiraAssignableUser[]
+  sprints             Sprint[]
+  issues              Issue[]
+  comments            Comment[]
+  worklogs            Worklog[]
+  userProjectLinks    UserProjectLink[]
+  dailySummaries      DailySummary[]
+  performanceNotes    PerformanceReviewNote[]
+  syncJobs            SyncJob[]
+  syncStates          SyncState[]
+  syncLogs            SyncLog[]
+  tickets             Ticket[]
+  artifacts           Artifact[]
+}
+
+model User {
+  id           String            @id @default(uuid())
+  tenantId     String            @default("dev")
+  email        String
+  displayName  String
+  phone        String?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  role         Role              @default(USER)
+  credential   Credential?
+  summaries    DailySummary[]
+  sitesCreated JiraSite[]        @relation("SiteCreator")
+  projectLinks UserProjectLink[]
+  performanceNotes PerformanceReviewNote[] @relation("PerformanceNoteManager")
+  tenant       Tenant            @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+model Credential {
+  id         String         @id @default(uuid())
+  tenantId   String         @default("dev")
+  type       CredentialType
+  secretHash String
+  userId     String         @unique
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  user       User           @relation(fields: [userId], references: [id])
+  tenant     Tenant         @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+}
+
+model JiraUser {
+  id             String    @id @default(uuid())
+  tenantId       String    @default("dev")
+  accountId      String
+  displayName    String
+  email          String?
+  avatarUrl      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  comments       Comment[] @relation("CommentAuthor")
+  issuesAssignee Issue[]   @relation("IssueAssignee")
+  worklogs       Worklog[] @relation("WorklogAuthor")
+  tenant         Tenant    @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, accountId])
+  @@index([tenantId])
+}
+
+model JiraSite {
+  id            String        @id @default(uuid())
+  tenantId      String        @default("dev")
+  alias         String
+  baseUrl       String
+  adminEmail    String
+  tokenCipher   String
+  createdById   String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  projects      JiraProject[]
+  createdBy     User?         @relation("SiteCreator", fields: [createdById], references: [id])
+  assignableUsers JiraAssignableUser[]
+  tenant        Tenant        @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, alias])
+  @@unique([tenantId, baseUrl])
+  @@index([tenantId])
+}
+
+model JiraProject {
+  id             String               @id @default(uuid())
+  tenantId       String               @default("dev")
+  jiraId         String
+  key            String
+  name           String
+  siteId         String
+  isActive       Boolean              @default(true)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  summaries      DailySummary[]
+  issues         Issue[]
+  site           JiraSite             @relation(fields: [siteId], references: [id])
+  trackedUsers   ProjectTrackedUser[]
+  syncJob        SyncJob?
+  syncLogs       SyncLog[]
+  syncStates     SyncState[]
+  accountLinks   UserProjectLink[]
+  performanceNotes PerformanceReviewNote[]
+  tenant         Tenant              @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, siteId, jiraId])
+  @@unique([tenantId, siteId, key])
+  @@index([tenantId])
+}
+
+model ProjectTrackedUser {
+  id            String      @id @default(uuid())
+  tenantId      String      @default("dev")
+  projectId     String
+  jiraAccountId String
+  displayName   String
+  email         String?
+  avatarUrl     String?
+  isTracked     Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  project       JiraProject @relation(fields: [projectId], references: [id])
+  performanceNotes PerformanceReviewNote[]
+  tenant        Tenant      @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, projectId, jiraAccountId])
+  @@index([tenantId])
+}
+
+model JiraAssignableUser {
+  id          String   @id @default(uuid())
+  tenantId    String   @default("dev")
+  siteId      String
+  projectKey  String
+  accountId   String
+  displayName String?
+  email       String?
+  avatarUrl   String?
+  fetchedAt   DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  site        JiraSite @relation(fields: [siteId], references: [id])
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, siteId, projectKey, accountId])
+  @@index([tenantId, siteId, projectKey])
+}
+
+model Sprint {
+  id        String    @id @default(uuid())
+  tenantId  String    @default("dev")
+  jiraId    String
+  name      String
+  state     String
+  startDate DateTime?
+  endDate   DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  issues    Issue[]
+  tenant    Tenant    @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, jiraId])
+  @@index([tenantId])
+}
+
+model Issue {
+  id            String      @id @default(uuid())
+  tenantId      String      @default("dev")
+  jiraId        String
+  key           String
+  summary       String?
+  status        String
+  assigneeId    String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  jiraCreatedAt DateTime
+  jiraUpdatedAt DateTime
+  priority      String?
+  projectId     String
+  remoteData    Json?
+  sprintId      String?
+  comments      Comment[]
+  assignee      JiraUser?   @relation("IssueAssignee", fields: [assigneeId], references: [id])
+  project       JiraProject @relation(fields: [projectId], references: [id])
+  sprint        Sprint?     @relation(fields: [sprintId], references: [id])
+  worklogs      Worklog[]
+  tenant        Tenant      @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, jiraId])
+  @@unique([tenantId, key])
+  @@index([tenantId, projectId])
+}
+
+model Comment {
+  id            String   @id @default(uuid())
+  tenantId      String   @default("dev")
+  jiraId        String
+  issueId       String
+  body          String
+  createdAt     DateTime @default(now())
+  authorId      String
+  jiraCreatedAt DateTime
+  jiraUpdatedAt DateTime?
+  updatedAt     DateTime @updatedAt
+  author        JiraUser @relation("CommentAuthor", fields: [authorId], references: [id])
+  issue         Issue    @relation(fields: [issueId], references: [id])
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, jiraId])
+  @@index([tenantId, issueId])
+}
+
+model Worklog {
+  id            String   @id @default(uuid())
+  tenantId      String   @default("dev")
+  jiraId        String
+  issueId       String
+  description   String?
+  timeSpent     Int
+  createdAt     DateTime @default(now())
+  authorId      String
+  jiraStartedAt DateTime
+  jiraUpdatedAt DateTime
+  updatedAt     DateTime @updatedAt
+  author        JiraUser @relation("WorklogAuthor", fields: [authorId], references: [id])
+  issue         Issue    @relation(fields: [issueId], references: [id])
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, jiraId])
+  @@index([tenantId, issueId])
+}
+
+model UserProjectLink {
+  id            String      @id @default(uuid())
+  tenantId      String      @default("dev")
+  userId        String
+  projectId     String
+  jiraAccountId String
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @default(now()) @updatedAt
+  project       JiraProject @relation(fields: [projectId], references: [id])
+  user          User        @relation(fields: [userId], references: [id])
+  tenant        Tenant      @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, userId, projectId])
+  @@index([tenantId, projectId])
+}
+
+model DailySummary {
+  id        String      @id @default(uuid())
+  tenantId  String      @default("dev")
+  userId    String
+  yesterday String?
+  today     String?
+  blockers  String?
+  date      DateTime
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @default(now()) @updatedAt
+  projectId String
+  project   JiraProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User        @relation(fields: [userId], references: [id])
+  tenant    Tenant      @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, userId, projectId, date])
+  @@index([tenantId, projectId])
+}
+
+model PerformanceReviewNote {
+  id             String             @id @default(uuid())
+  tenantId       String             @default("dev")
+  projectId      String
+  trackedUserId  String
+  managerId      String
+  startDate      DateTime
+  endDate        DateTime
+  markdown       String
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  project        JiraProject        @relation(fields: [projectId], references: [id])
+  trackedUser    ProjectTrackedUser @relation(fields: [trackedUserId], references: [id])
+  manager        User               @relation("PerformanceNoteManager", fields: [managerId], references: [id])
+  tenant         Tenant             @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, projectId, trackedUserId, managerId, startDate, endDate])
+  @@index([tenantId, projectId])
+}
+
+model SyncJob {
+  id           String        @id @default(uuid())
+  tenantId     String        @default("dev")
+  projectId    String        @unique
+  workflowId   String
+  scheduleId   String
+  cronSchedule String
+  backoffLevel Int           @default(0)
+  backoffOriginalCron String?
+  backoffLastNotifiedAt DateTime?
+  status       SyncJobStatus @default(ACTIVE)
+  lastRunAt    DateTime?
+  nextRunAt    DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  project      JiraProject   @relation(fields: [projectId], references: [id])
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, workflowId])
+  @@unique([tenantId, scheduleId])
+  @@index([tenantId, status])
+}
+
+model SyncState {
+  id           String      @id @default(uuid())
+  tenantId     String      @default("dev")
+  projectId    String
+  entity       String
+  lastSyncTime DateTime?
+  status       SyncStatus  @default(IDLE)
+  metadata     Json?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  project      JiraProject @relation(fields: [projectId], references: [id])
+  tenant       Tenant      @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, projectId, entity])
+  @@index([tenantId, projectId])
+}
+
+model SyncLog {
+  id        String      @id @default(uuid())
+  tenantId  String      @default("dev")
+  projectId String
+  level     String
+  message   String
+  details   Json?
+  createdAt DateTime    @default(now())
+  project   JiraProject @relation(fields: [projectId], references: [id])
+  tenant    Tenant      @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, projectId])
+}
+
+model Ticket {
+  id          String   @id
+  tenantId    String   @default("dev")
+  source      String
+  externalKey String
+  project     String?
+  type        String?
+  status      String?
+  title       String
+  desc        String?
+  labels      String[]
+  assignee    String?
+  parentId    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  artifacts   Artifact[]
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, externalKey])
+  @@index([tenantId, status])
+}
+
+model Artifact {
+  id        BigInt    @id @default(autoincrement())
+  tenantId  String    @default("dev")
+  ticketId  String
+  name      String
+  kind      String
+  mime      String
+  size      Int
+  sha256    String?
+  uri       String
+  createdAt DateTime  @default(now())
+  ticket    Ticket    @relation(fields: [ticketId], references: [id])
+  tenant    Tenant    @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, ticketId])
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  USER
+}
+
+enum CredentialType {
+  LOCAL
+}
+
+enum SyncJobStatus {
+  ACTIVE
+  PAUSED
+  ERROR
+}
+
+enum SyncStatus {
+  IDLE
+  RUNNING
+  SUCCESS
+  FAILED
+}

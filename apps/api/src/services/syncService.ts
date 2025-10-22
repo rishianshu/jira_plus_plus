@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "@platform/cdm";
 import { getTemporalClient, getTaskQueue } from "../temporal/client.js";
 import { getEnv } from "../env.js";
 import { SYNC_WORKFLOW_NAME } from "../temporal/workflows/syncProjectWorkflow.js";
@@ -21,6 +21,7 @@ export async function initializeProjectSync(prisma: PrismaClient, projectId: str
   if (!project.syncJob) {
     await prisma.syncJob.create({
       data: {
+        tenantId: project.tenantId,
         projectId,
         workflowId,
         scheduleId,
@@ -34,12 +35,14 @@ export async function initializeProjectSync(prisma: PrismaClient, projectId: str
   for (const entity of entities) {
     await prisma.syncState.upsert({
       where: {
-        projectId_entity: {
+        tenantId_projectId_entity: {
+          tenantId: project.tenantId,
           projectId,
           entity,
         },
       },
       create: {
+        tenantId: project.tenantId,
         projectId,
         entity,
       },

@@ -1,13 +1,11 @@
 {
   "name": "@platform/clients",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
-  "exports": "./index.js",
-  "scripts": {
-    "build": "echo 'noop'",
-    "dev": "echo 'noop'",
-    "lint": "echo 'noop'",
-    "test": "echo 'noop'"
+  "main": "index.js",
+  "types": "index.d.ts",
+  "dependencies": {
+    "@platform/cdm": "workspace:*"
   }
 }

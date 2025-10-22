@@ -22,9 +22,19 @@
     "verify": "bash scripts/verify.sh",
     "hooks": "bash scripts/setup-hooks.sh",
     "e2e:run": "cypress run --config-file cypress.config.ts",
-    "e2e:open": "cypress open --config-file cypress.config.ts"
+    "e2e:open": "cypress open --config-file cypress.config.ts",
+    "db:up": "dotenv -e .env -- docker compose -f infra/docker-compose.yml -f infra/docker-compose.data.yml up -d --remove-orphans postgres minio nats",
+    "db:down": "dotenv -e .env -- docker compose -f infra/docker-compose.yml -f infra/docker-compose.data.yml down --remove-orphans",
+    "stack:up": "dotenv -e .env -- docker compose -f infra/docker-compose.yml up -d",
+    "stack:down": "dotenv -e .env -- docker compose -f infra/docker-compose.yml down",
+    "migrate": "dotenv -e .env -- pnpm --filter @platform/cdm exec -- prisma migrate dev --schema prisma/schema.prisma",
+    "migrate:deploy": "dotenv -e .env -- pnpm --filter @platform/cdm exec -- prisma migrate deploy --schema prisma/schema.prisma",
+    "migrate:status": "dotenv -e .env -- pnpm --filter @platform/cdm exec -- prisma migrate status --schema prisma/schema.prisma",
+    "prisma:generate": "dotenv -e .env -- pnpm --filter @platform/cdm exec -- prisma generate --schema prisma/schema.prisma"
   },
   "devDependencies": {
-    "cypress": "^13.13.1"
+    "cypress": "^13.13.1",
+    "@types/node": "^20.11.30",
+    "dotenv-cli": "^7.3.0"
   }
 }

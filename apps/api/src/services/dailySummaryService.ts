@@ -8,7 +8,7 @@ import {
   type ProjectTrackedUser,
   type User,
   type Worklog,
-} from "@prisma/client";
+} from "@platform/cdm";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { DateTime } from "luxon";
@@ -407,7 +407,8 @@ async function finalizeSummary({
   if (user) {
     const record = await prisma.dailySummary.upsert({
       where: {
-        userId_projectId_date: {
+        tenantId_userId_projectId_date: {
+          tenantId: user.tenantId,
           userId: user.id,
           projectId,
           date: baseDate,
@@ -415,6 +416,7 @@ async function finalizeSummary({
       },
       include: { user: true, project: true },
       create: {
+        tenantId: user.tenantId,
         userId: user.id,
         projectId,
         date: baseDate,
@@ -777,12 +779,10 @@ export async function generateSummaryForUser(
     throw new GraphQLError("User not found");
   }
 
-  const projectLink = await prisma.userProjectLink.findUnique({
+  const projectLink = await prisma.userProjectLink.findFirst({
     where: {
-      userId_projectId: {
-        userId: user.id,
-        projectId,
-      },
+      userId: user.id,
+      projectId,
     },
   });
 

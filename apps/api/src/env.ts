@@ -23,6 +23,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().default(4000),
   WORKER_PORT: z.coerce.number().default(4001),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+  TENANT_ID: z.string().default("dev"),
   JIRA_BASE_URL: z.string().min(1, "JIRA_BASE_URL is required"),
   JIRA_EMAIL: z.string().email(),
   JIRA_API_TOKEN: z.string().min(1, "JIRA_API_TOKEN is required"),

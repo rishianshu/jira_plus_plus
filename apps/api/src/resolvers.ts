@@ -2,7 +2,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { GraphQLError } from "graphql";
 import { DateResolver, DateTimeResolver, JSONResolver } from "graphql-scalars";
-import { CredentialType, type ProjectTrackedUser } from "@prisma/client";
+import { CredentialType, type PrismaClient, type ProjectTrackedUser } from "@platform/cdm";
 import type { RequestContext } from "./context.js";
 import {
   createAuthToken,
@@ -55,6 +55,9 @@ function requireAdmin(ctx: RequestContext) {
   return user;
 }
 
+const runAsTenant = <T>(ctx: RequestContext, fn: (tx: PrismaClient) => Promise<T>) =>
+  ctx.withTenant(fn);
+
 export const resolvers = {
   DateTime: DateTimeResolver,
   Date: DateResolver,
@@ -66,18 +69,24 @@ export const resolvers = {
     }),
     me: async (_parent: unknown, _args: unknown, ctx: RequestContext) => {
       const auth = requireUser(ctx);
-      return ctx.prisma.user.findUnique({ where: { id: auth.id } });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.user.findUnique({ where: { id: auth.id } }),
+      );
     },
     users: async (_parent: unknown, _args: unknown, ctx: RequestContext) => {
       requireAdmin(ctx);
-      return ctx.prisma.user.findMany({ orderBy: { createdAt: "desc" } });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.user.findMany({ orderBy: { createdAt: "desc" } }),
+      );
     },
     jiraSites: async (_parent: unknown, _args: unknown, ctx: RequestContext) => {
       requireAdmin(ctx);
-      return ctx.prisma.jiraSite.findMany({
-        include: { projects: true },
-        orderBy: { createdAt: "desc" },
-      });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.jiraSite.findMany({
+          include: { projects: true },
+          orderBy: { createdAt: "desc" },
+        }),
+      );
     },
     jiraProjects: async (
       _parent: unknown,
@@ -85,16 +94,18 @@ export const resolvers = {
       ctx: RequestContext,
     ) => {
       requireAdmin(ctx);
-      return ctx.prisma.jiraProject.findMany({
-        where: { siteId: args.siteId },
-        include: {
-          site: true,
-          trackedUsers: true,
-          syncJob: true,
-          syncStates: true,
-        },
-        orderBy: { createdAt: "desc" },
-      });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.jiraProject.findMany({
+          where: { siteId: args.siteId },
+          include: {
+            site: true,
+            trackedUsers: true,
+            syncJob: true,
+            syncStates: true,
+          },
+          orderBy: { createdAt: "desc" },
+        }),
+      );
     },
     userProjectLinks: async (
       _parent: unknown,
@@ -102,11 +113,13 @@ export const resolvers = {
       ctx: RequestContext,
     ) => {
       requireAdmin(ctx);
-      return ctx.prisma.userProjectLink.findMany({
-        where: { userId: args.userId },
-        include: { project: { include: { site: true } }, user: true },
-        orderBy: { createdAt: "desc" },
-      });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.userProjectLink.findMany({
+          where: { userId: args.userId },
+          include: { project: { include: { site: true } }, user: true },
+          orderBy: { createdAt: "desc" },
+        }),
+      );
     },
     jiraProjectOptions: async (
       _parent: unknown,
@@ -114,7 +127,9 @@ export const resolvers = {
       ctx: RequestContext,
     ) => {
       requireAdmin(ctx);
-      return fetchJiraProjectOptions(ctx.prisma, args.siteId);
+      return runAsTenant(ctx, (prisma) =>
+        fetchJiraProjectOptions(prisma, ctx.tenantId, args.siteId),
+      );
     },
     jiraProjectUserOptions: async (
       _parent: unknown,
@@ -122,9 +137,11 @@ export const resolvers = {
       ctx: RequestContext,
     ) => {
       requireAdmin(ctx);
-      return fetchJiraProjectUsers(ctx.prisma, args.siteId, args.projectKey, {
-        forceRefresh: args.forceRefresh ?? false,
-      });
+      return runAsTenant(ctx, (prisma) =>
+        fetchJiraProjectUsers(prisma, ctx.tenantId, args.siteId, args.projectKey, {
+          forceRefresh: args.forceRefresh ?? false,
+        }),
+      );
     },
     projectTrackedUsers: async (
       _parent: unknown,
@@ -132,10 +149,12 @@ export const resolvers = {
       ctx: RequestContext,
     ) => {
       requireAdmin(ctx);
-      return ctx.prisma.projectTrackedUser.findMany({
-        where: { projectId: args.projectId },
-        orderBy: { displayName: "asc" },
-      });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.projectTrackedUser.findMany({
+          where: { projectId: args.projectId },
+          orderBy: { displayName: "asc" },
+        }),
+      );
     },
     dailySummaries: async (
       _parent: unknown,
@@ -143,17 +162,19 @@ export const resolvers = {
       ctx: RequestContext,
     ) => {
       const auth = requireUser(ctx);
-      if (auth.role !== "ADMIN") {
-        const membership = await ctx.prisma.userProjectLink.count({
-          where: { projectId: args.projectId, userId: auth.id },
-        });
-        if (!membership) {
-          throw new GraphQLError("You do not have access to this project", {
-            extensions: { code: "FORBIDDEN" },
+      return runAsTenant(ctx, async (prisma) => {
+        if (auth.role !== "ADMIN") {
+          const membership = await prisma.userProjectLink.count({
+            where: { projectId: args.projectId, userId: auth.id },
           });
+          if (!membership) {
+            throw new GraphQLError("You do not have access to this project", {
+              extensions: { code: "FORBIDDEN" },
+            });
+          }
         }
-      }
-      return generateSummariesForDate(ctx.prisma, args.date, args.projectId);
+        return generateSummariesForDate(prisma, args.date, args.projectId);
+      });
     },
     scrumProjects: async (_parent: unknown, _args: unknown, ctx: RequestContext) => {
       const auth = requireUser(ctx);
@@ -170,23 +191,25 @@ export const resolvers = {
           },
         },
       } as const;
-      if (auth.role === "ADMIN") {
-        return ctx.prisma.jiraProject.findMany({
-          where: { isActive: true },
+      return runAsTenant(ctx, (prisma) => {
+        if (auth.role === "ADMIN") {
+          return prisma.jiraProject.findMany({
+            where: { isActive: true },
+            orderBy: { name: "asc" },
+            include: projectInclude,
+          });
+        }
+
+        return prisma.jiraProject.findMany({
+          where: {
+            isActive: true,
+            accountLinks: {
+              some: { userId: auth.id },
+            },
+          },
           orderBy: { name: "asc" },
           include: projectInclude,
         });
-      }
-
-      return ctx.prisma.jiraProject.findMany({
-        where: {
-          isActive: true,
-          accountLinks: {
-            some: { userId: auth.id },
-          },
-        },
-        orderBy: { name: "asc" },
-        include: projectInclude,
       });
     },
     focusBoard: async (
@@ -199,11 +222,13 @@ export const resolvers = {
       ctx: RequestContext,
     ) => {
       const auth = requireUser(ctx);
-      return buildFocusBoard(ctx.prisma, auth.id, {
-        projectIds: args.projectIds ?? null,
-        start: args.start ?? null,
-        end: args.end ?? null,
-      });
+      return runAsTenant(ctx, (prisma) =>
+        buildFocusBoard(prisma, auth.id, {
+          projectIds: args.projectIds ?? null,
+          start: args.start ?? null,
+          end: args.end ?? null,
+        }),
+      );
     },
     syncStates: async (
       _parent: unknown,
@@ -211,10 +236,12 @@ export const resolvers = {
       ctx: RequestContext,
     ) => {
       requireAdmin(ctx);
-      return ctx.prisma.syncState.findMany({
-        where: { projectId: args.projectId },
-        orderBy: { entity: "asc" },
-      });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.syncState.findMany({
+          where: { projectId: args.projectId },
+          orderBy: { entity: "asc" },
+        }),
+      );
     },
     syncLogs: async (
       _parent: unknown,
@@ -222,11 +249,13 @@ export const resolvers = {
       ctx: RequestContext,
     ) => {
       requireAdmin(ctx);
-      return ctx.prisma.syncLog.findMany({
-        where: { projectId: args.projectId },
-        orderBy: { createdAt: "desc" },
-        take: args.limit ?? 50,
-      });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.syncLog.findMany({
+          where: { projectId: args.projectId },
+          orderBy: { createdAt: "desc" },
+          take: args.limit ?? 50,
+        }),
+      );
     },
     projectSprints: async (
       _parent: unknown,
@@ -234,24 +263,26 @@ export const resolvers = {
       ctx: RequestContext,
     ) => {
       const auth = requireUser(ctx);
-      if (auth.role !== "ADMIN") {
-        const membership = await ctx.prisma.userProjectLink.count({
-          where: { projectId: args.projectId, userId: auth.id },
-        });
-        if (!membership) {
-          throw new GraphQLError("You do not have access to this project", {
-            extensions: { code: "FORBIDDEN" },
+      return runAsTenant(ctx, async (prisma) => {
+        if (auth.role !== "ADMIN") {
+          const membership = await prisma.userProjectLink.count({
+            where: { projectId: args.projectId, userId: auth.id },
           });
+          if (!membership) {
+            throw new GraphQLError("You do not have access to this project", {
+              extensions: { code: "FORBIDDEN" },
+            });
+          }
         }
-      }
 
-      return ctx.prisma.sprint.findMany({
-        where: { issues: { some: { projectId: args.projectId } } },
-        orderBy: [
-          { startDate: "desc" },
-          { endDate: "desc" },
-          { createdAt: "desc" },
-        ],
+        return prisma.sprint.findMany({
+          where: { issues: { some: { projectId: args.projectId } } },
+          orderBy: [
+            { startDate: "desc" },
+            { endDate: "desc" },
+            { createdAt: "desc" },
+          ],
+        });
       });
     },
     managerSummary: async (
@@ -261,37 +292,39 @@ export const resolvers = {
     ) => {
       const auth = requireUser(ctx);
       try {
-        if (args.projectId) {
-          return await buildManagerSummary(ctx.prisma, auth, {
-            projectId: args.projectId,
-            sprintId: args.sprintId ?? null,
-          });
-        }
+        return await runAsTenant(ctx, async (prisma) => {
+          if (args.projectId) {
+            return buildManagerSummary(prisma, auth, {
+              projectId: args.projectId,
+              sprintId: args.sprintId ?? null,
+            });
+          }
 
-        const accessibleProjects =
-          auth.role === "ADMIN"
-            ? await ctx.prisma.jiraProject.findMany({
-                where: { isActive: true },
-                select: { id: true },
-              })
-            : await ctx.prisma.jiraProject.findMany({
-                where: {
-                  isActive: true,
-                  accountLinks: {
-                    some: { userId: auth.id },
+          const accessibleProjects =
+            auth.role === "ADMIN"
+              ? await prisma.jiraProject.findMany({
+                  where: { isActive: true },
+                  select: { id: true },
+                })
+              : await prisma.jiraProject.findMany({
+                  where: {
+                    isActive: true,
+                    accountLinks: {
+                      some: { userId: auth.id },
+                    },
                   },
-                },
-                select: { id: true },
-              });
+                  select: { id: true },
+                });
 
-        const projectIds = accessibleProjects.map((project) => project.id);
-        if (!projectIds.length) {
-          throw new GraphQLError("No accessible projects available", {
-            extensions: { code: "NOT_FOUND" },
-          });
-        }
+          const projectIds = accessibleProjects.map(({ id }) => id);
+          if (!projectIds.length) {
+            throw new GraphQLError("No accessible projects available", {
+              extensions: { code: "NOT_FOUND" },
+            });
+          }
 
-        return await buildPortfolioManagerSummary(ctx.prisma, auth, projectIds);
+          return buildPortfolioManagerSummary(prisma, auth, projectIds);
+        });
       } catch (error) {
         if (error instanceof GraphQLError) {
           throw error;
@@ -319,10 +352,12 @@ export const resolvers = {
       ctx: RequestContext,
     ) => {
       const { email, password } = args.input;
-      const user = await ctx.prisma.user.findUnique({
-        where: { email },
-        include: { credential: true },
-      });
+      const user = await runAsTenant(ctx, (prisma) =>
+        prisma.user.findUnique({
+          where: { tenantId_email: { tenantId: ctx.tenantId, email } },
+          include: { credential: true },
+        }),
+      );
 
       if (!user || !user.credential) {
         throw new GraphQLError("Invalid credentials", {
@@ -368,7 +403,11 @@ export const resolvers = {
         sendInvite = true,
       } = args.input;
 
-      const existing = await ctx.prisma.user.findUnique({ where: { email } });
+      const existing = await runAsTenant(ctx, (prisma) =>
+        prisma.user.findUnique({
+          where: { tenantId_email: { tenantId: ctx.tenantId, email } },
+        }),
+      );
       if (existing) {
         throw new GraphQLError("A user with this email already exists", {
           extensions: { code: "BAD_USER_INPUT" },
@@ -377,20 +416,24 @@ export const resolvers = {
 
       const temporaryPassword = generateTemporaryPassword();
       const passwordHash = await hashPassword(temporaryPassword);
-      const user = await ctx.prisma.user.create({
-        data: {
-          email,
-          displayName,
-          phone,
-          role,
-          credential: {
-            create: {
-              type: CredentialType.LOCAL,
-              secretHash: passwordHash,
+      const user = await runAsTenant(ctx, (prisma) =>
+        prisma.user.create({
+          data: {
+            tenantId: ctx.tenantId,
+            email,
+            displayName,
+            phone,
+            role,
+            credential: {
+              create: {
+                tenantId: ctx.tenantId,
+                type: CredentialType.LOCAL,
+                secretHash: passwordHash,
+              },
             },
           },
-        },
-      });
+        }),
+      );
 
       if (sendInvite) {
         try {
@@ -417,54 +460,57 @@ export const resolvers = {
       requireAdmin(ctx);
       const { userId } = args.input;
 
-      const user = await ctx.prisma.user.findUnique({
-        where: { id: userId },
-      });
-
-      if (!user) {
-        throw new GraphQLError("User not found", {
-          extensions: { code: "NOT_FOUND" },
-        });
-      }
-
-      const temporaryPassword = generateTemporaryPassword();
-      const passwordHash = await hashPassword(temporaryPassword);
-
-      await ctx.prisma.$transaction(async (tx) => {
-        const credential = await tx.credential.findUnique({
-          where: { userId: user.id },
+      return runAsTenant(ctx, async (prisma) => {
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
         });
 
-        if (credential) {
-          await tx.credential.update({
-            where: { id: credential.id },
-            data: { secretHash: passwordHash },
-          });
-        } else {
-          await tx.credential.create({
-            data: {
-              type: CredentialType.LOCAL,
-              secretHash: passwordHash,
-              userId: user.id,
-            },
+        if (!user) {
+          throw new GraphQLError("User not found", {
+            extensions: { code: "NOT_FOUND" },
           });
         }
+
+        const temporaryPassword = generateTemporaryPassword();
+        const passwordHash = await hashPassword(temporaryPassword);
+
+        await prisma.$transaction(async (tx) => {
+          const credential = await tx.credential.findUnique({
+            where: { userId: user.id },
+          });
+
+          if (credential) {
+            await tx.credential.update({
+              where: { id: credential.id },
+              data: { secretHash: passwordHash },
+            });
+          } else {
+            await tx.credential.create({
+              data: {
+                tenantId: ctx.tenantId,
+                type: CredentialType.LOCAL,
+                secretHash: passwordHash,
+                userId: user.id,
+              },
+            });
+          }
+        });
+
+        try {
+          await sendPasswordResetEmail({
+            email: user.email,
+            displayName: user.displayName,
+            temporaryPassword,
+          });
+        } catch (error) {
+          console.error("Failed to send password reset email", error);
+          throw new GraphQLError("Password updated, but failed to send reset email", {
+            extensions: { code: "INTERNAL_SERVER_ERROR" },
+          });
+        }
+
+        return true;
       });
-
-      try {
-        await sendPasswordResetEmail({
-          email: user.email,
-          displayName: user.displayName,
-          temporaryPassword,
-        });
-      } catch (error) {
-        console.error("Failed to send password reset email", error);
-        throw new GraphQLError("Password updated, but failed to send reset email", {
-          extensions: { code: "INTERNAL_SERVER_ERROR" },
-        });
-      }
-
-      return true;
     },
     updateUserRole: async (
       _parent: unknown,
@@ -479,10 +525,12 @@ export const resolvers = {
         });
       }
 
-      return ctx.prisma.user.update({
-        where: { id: args.input.userId },
-        data: { role: args.input.role },
-      });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.user.update({
+          where: { id: args.input.userId },
+          data: { role: args.input.role },
+        }),
+      );
     },
     registerJiraSite: async (
       _parent: unknown,
@@ -510,16 +558,19 @@ export const resolvers = {
 
       const encryptedToken = encryptSecret(apiToken);
 
-      return ctx.prisma.jiraSite.create({
-        data: {
-          alias,
-          baseUrl,
-          adminEmail,
-          tokenCipher: encryptedToken,
-          createdById: admin.id,
-        },
-        include: { projects: true },
-      });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.jiraSite.create({
+          data: {
+            tenantId: ctx.tenantId,
+            alias,
+            baseUrl,
+            adminEmail,
+            tokenCipher: encryptedToken,
+            createdById: admin.id,
+          },
+          include: { projects: true },
+        }),
+      );
     },
     registerJiraProject: async (
       _parent: unknown,
@@ -530,36 +581,39 @@ export const resolvers = {
     ) => {
       requireAdmin(ctx);
 
-      const site = await ctx.prisma.jiraSite.findUnique({
-        where: { id: args.input.siteId },
-      });
-
-      if (!site) {
-        throw new GraphQLError("Jira site not found", {
-          extensions: { code: "BAD_USER_INPUT" },
+      return runAsTenant(ctx, async (prisma) => {
+        const site = await prisma.jiraSite.findFirst({
+          where: { id: args.input.siteId, tenantId: ctx.tenantId },
         });
-      }
 
-      const project = await ctx.prisma.jiraProject.create({
-        data: {
-          siteId: args.input.siteId,
-          jiraId: args.input.jiraId,
-          key: args.input.key,
-          name: args.input.name,
-        },
-        include: {
-          site: true,
-          trackedUsers: true,
-          syncJob: true,
-          syncStates: true,
-        },
+        if (!site) {
+          throw new GraphQLError("Jira site not found", {
+            extensions: { code: "BAD_USER_INPUT" },
+          });
+        }
+
+        const project = await prisma.jiraProject.create({
+          data: {
+            tenantId: ctx.tenantId,
+            siteId: args.input.siteId,
+            jiraId: args.input.jiraId,
+            key: args.input.key,
+            name: args.input.name,
+          },
+          include: {
+            site: true,
+            trackedUsers: true,
+            syncJob: true,
+            syncStates: true,
+          },
+        });
+
+        await initializeProjectSync(prisma, project.id);
+        await triggerProjectSync(prisma, project.id, { full: true });
+        await updateNextRunFromSchedule(prisma, project.id);
+
+        return project;
       });
-
-      await initializeProjectSync(ctx.prisma, project.id);
-      await triggerProjectSync(ctx.prisma, project.id, { full: true });
-      await updateNextRunFromSchedule(ctx.prisma, project.id);
-
-      return project;
     },
     mapUserToProject: async (
       _parent: unknown,
@@ -568,36 +622,43 @@ export const resolvers = {
     ) => {
       requireAdmin(ctx);
 
-      const [user, project] = await Promise.all([
-        ctx.prisma.user.findUnique({ where: { id: args.input.userId } }),
-        ctx.prisma.jiraProject.findUnique({ where: { id: args.input.projectId }, include: { site: true } }),
-      ]);
+      return runAsTenant(ctx, async (prisma) => {
+        const [user, project] = await Promise.all([
+          prisma.user.findFirst({ where: { id: args.input.userId, tenantId: ctx.tenantId } }),
+          prisma.jiraProject.findFirst({
+            where: { id: args.input.projectId, tenantId: ctx.tenantId },
+            include: { site: true },
+          }),
+        ]);
 
-      if (!user || !project) {
-        throw new GraphQLError("User or project not found", {
-          extensions: { code: "BAD_USER_INPUT" },
-        });
-      }
+        if (!user || !project) {
+          throw new GraphQLError("User or project not found", {
+            extensions: { code: "BAD_USER_INPUT" },
+          });
+        }
 
-      return ctx.prisma.userProjectLink.upsert({
-        where: {
-          userId_projectId: {
+        return prisma.userProjectLink.upsert({
+          where: {
+            tenantId_userId_projectId: {
+              tenantId: ctx.tenantId,
+              userId: args.input.userId,
+              projectId: args.input.projectId,
+            },
+          },
+          update: {
+            jiraAccountId: args.input.jiraAccountId,
+          },
+          create: {
+            tenantId: ctx.tenantId,
             userId: args.input.userId,
             projectId: args.input.projectId,
+            jiraAccountId: args.input.jiraAccountId,
           },
-        },
-        update: {
-          jiraAccountId: args.input.jiraAccountId,
-        },
-        create: {
-          userId: args.input.userId,
-          projectId: args.input.projectId,
-          jiraAccountId: args.input.jiraAccountId,
-        },
-        include: {
-          user: true,
-          project: { include: { site: true } },
-        },
+          include: {
+            user: true,
+            project: { include: { site: true } },
+          },
+        });
       });
     },
     unlinkUserFromProject: async (
@@ -607,7 +668,9 @@ export const resolvers = {
     ) => {
       requireAdmin(ctx);
       try {
-        await ctx.prisma.userProjectLink.delete({ where: { id: args.linkId } });
+        await runAsTenant(ctx, (prisma) =>
+          prisma.userProjectLink.delete({ where: { id: args.linkId } }),
+        );
         return true;
       } catch {
         return false;
@@ -631,64 +694,69 @@ export const resolvers = {
     ) => {
       requireAdmin(ctx);
 
-      const project = await ctx.prisma.jiraProject.findUnique({
-        where: { id: args.input.projectId },
-        include: { trackedUsers: true },
-      });
-
-      if (!project) {
-        throw new GraphQLError("Project not found", {
-          extensions: { code: "BAD_USER_INPUT" },
+      return runAsTenant(ctx, async (prisma) => {
+        const project = await prisma.jiraProject.findFirst({
+          where: { id: args.input.projectId, tenantId: ctx.tenantId },
+          include: { trackedUsers: true },
         });
-      }
 
-      const incomingIds = new Set(args.input.users.map((user) => user.jiraAccountId));
+        if (!project) {
+            throw new GraphQLError("Project not found", {
+              extensions: { code: "BAD_USER_INPUT" },
+            });
+        }
 
-      if (project.trackedUsers.length) {
-        await ctx.prisma.projectTrackedUser.deleteMany({
-          where: {
-            projectId: project.id,
-            jiraAccountId: { notIn: Array.from(incomingIds) },
-          },
-        });
-      }
+        const incomingIds = new Set(args.input.users.map((user) => user.jiraAccountId));
 
-      for (const user of args.input.users) {
-        await ctx.prisma.projectTrackedUser.upsert({
-          where: {
-            projectId_jiraAccountId: {
+        if (project.trackedUsers.length) {
+          await prisma.projectTrackedUser.deleteMany({
+            where: {
+              tenantId: ctx.tenantId,
+              projectId: project.id,
+              jiraAccountId: { notIn: Array.from(incomingIds) },
+            },
+          });
+        }
+
+        for (const user of args.input.users) {
+          await prisma.projectTrackedUser.upsert({
+            where: {
+              tenantId_projectId_jiraAccountId: {
+                tenantId: ctx.tenantId,
+                projectId: project.id,
+                jiraAccountId: user.jiraAccountId,
+              },
+            },
+            update: {
+              displayName: user.displayName,
+              email: user.email ?? null,
+              avatarUrl: user.avatarUrl ?? null,
+              isTracked: user.isTracked ?? true,
+            },
+            create: {
+              tenantId: ctx.tenantId,
               projectId: project.id,
               jiraAccountId: user.jiraAccountId,
+              displayName: user.displayName,
+              email: user.email ?? null,
+              avatarUrl: user.avatarUrl ?? null,
+              isTracked: user.isTracked ?? true,
             },
-          },
-          update: {
-            displayName: user.displayName,
-            email: user.email ?? null,
-            avatarUrl: user.avatarUrl ?? null,
-            isTracked: user.isTracked ?? true,
-          },
-          create: {
-            projectId: project.id,
-            jiraAccountId: user.jiraAccountId,
-            displayName: user.displayName,
-            email: user.email ?? null,
-            avatarUrl: user.avatarUrl ?? null,
-            isTracked: user.isTracked ?? true,
-          },
+          });
+        }
+
+        const tracked: ProjectTrackedUser[] = await prisma.projectTrackedUser.findMany({
+          where: { tenantId: ctx.tenantId, projectId: project.id },
+          orderBy: { displayName: "asc" },
         });
-      }
 
-      const tracked: ProjectTrackedUser[] = await ctx.prisma.projectTrackedUser.findMany({
-        where: { projectId: project.id },
-        orderBy: { displayName: "asc" },
+        await triggerProjectSync(prisma, project.id, {
+          full: true,
+          accountIds: tracked.filter((user) => user.isTracked).map((user) => user.jiraAccountId),
+        });
+
+        return tracked;
       });
-
-      await triggerProjectSync(ctx.prisma, project.id, {
-        full: true,
-        accountIds: tracked.filter((user) => user.isTracked).map((user) => user.jiraAccountId),
-      });
-
-      return tracked;
     },
     startProjectSync: async (
       _parent: unknown,
@@ -696,19 +764,23 @@ export const resolvers = {
       ctx: RequestContext,
     ) => {
       requireAdmin(ctx);
-      await startProjectSync(ctx.prisma, args.projectId, args.full ?? false);
-      await updateNextRunFromSchedule(ctx.prisma, args.projectId);
+      await runAsTenant(ctx, async (prisma) => {
+        await startProjectSync(prisma, args.projectId, args.full ?? false);
+        await updateNextRunFromSchedule(prisma, args.projectId);
+      });
       return true;
     },
     pauseProjectSync: async (_parent: unknown, args: { projectId: string }, ctx: RequestContext) => {
       requireAdmin(ctx);
-      await pauseProjectSync(ctx.prisma, args.projectId);
+      await runAsTenant(ctx, (prisma) => pauseProjectSync(prisma, args.projectId));
       return true;
     },
     resumeProjectSync: async (_parent: unknown, args: { projectId: string }, ctx: RequestContext) => {
       requireAdmin(ctx);
-      await resumeProjectSync(ctx.prisma, args.projectId);
-      await updateNextRunFromSchedule(ctx.prisma, args.projectId);
+      await runAsTenant(ctx, async (prisma) => {
+        await resumeProjectSync(prisma, args.projectId);
+        await updateNextRunFromSchedule(prisma, args.projectId);
+      });
       return true;
     },
     rescheduleProjectSync: async (
@@ -717,8 +789,10 @@ export const resolvers = {
       ctx: RequestContext,
     ) => {
       requireAdmin(ctx);
-      await rescheduleProjectSync(ctx.prisma, args.projectId, args.cron);
-      await updateNextRunFromSchedule(ctx.prisma, args.projectId);
+      await runAsTenant(ctx, async (prisma) => {
+        await rescheduleProjectSync(prisma, args.projectId, args.cron);
+        await updateNextRunFromSchedule(prisma, args.projectId);
+      });
       return true;
     },
     triggerProjectSync: async (
@@ -727,10 +801,12 @@ export const resolvers = {
       ctx: RequestContext,
     ) => {
       requireAdmin(ctx);
-      await triggerProjectSync(ctx.prisma, args.projectId, {
-        full: args.full ?? false,
-        accountIds: args.accountIds ?? undefined,
-      });
+      await runAsTenant(ctx, (prisma) =>
+        triggerProjectSync(prisma, args.projectId, {
+          full: args.full ?? false,
+          accountIds: args.accountIds ?? undefined,
+        }),
+      );
       return true;
     },
     generateDailySummaries: async (
@@ -739,7 +815,7 @@ export const resolvers = {
       ctx: RequestContext,
     ) => {
       requireAdmin(ctx);
-      return generateSummariesForDate(ctx.prisma, args.date, args.projectId);
+      return runAsTenant(ctx, (prisma) => generateSummariesForDate(prisma, args.date, args.projectId));
     },
     regenerateDailySummary: async (
       _parent: unknown,
@@ -752,17 +828,19 @@ export const resolvers = {
           extensions: { code: "FORBIDDEN" },
         });
       }
-      if (auth.role !== "ADMIN") {
-        const membership = await ctx.prisma.userProjectLink.count({
-          where: { projectId: args.projectId, userId: auth.id },
-        });
-        if (!membership) {
-          throw new GraphQLError("You do not have access to this project", {
-            extensions: { code: "FORBIDDEN" },
+      return runAsTenant(ctx, async (prisma) => {
+        if (auth.role !== "ADMIN") {
+          const membership = await prisma.userProjectLink.count({
+            where: { projectId: args.projectId, userId: auth.id },
           });
+          if (!membership) {
+            throw new GraphQLError("You do not have access to this project", {
+              extensions: { code: "FORBIDDEN" },
+            });
+          }
         }
-      }
-      return generateSummaryForUser(ctx.prisma, args.userId, args.date, args.projectId);
+        return generateSummaryForUser(prisma, args.userId, args.date, args.projectId);
+      });
     },
     exportDailySummaries: async (
       _parent: unknown,
@@ -771,85 +849,101 @@ export const resolvers = {
     ) => {
       requireAdmin(ctx);
 
-      if (args.target === "PDF") {
-        const pdfPath = path.join(process.cwd(), "exports", `daily-scrum-${args.date}.pdf`);
-        await fs.mkdir(path.dirname(pdfPath), { recursive: true });
-        const { path: generatedPath } = await exportSummariesToPdf(
-          ctx.prisma,
-          args.date,
-          args.projectId,
-          pdfPath,
-        );
-        return {
-          success: true,
-          message: "Daily scrum PDF generated",
-          location: generatedPath,
-        };
-      }
+      return runAsTenant(ctx, async (prisma) => {
+        if (args.target === "PDF") {
+          const pdfPath = path.join(process.cwd(), "exports", `daily-scrum-${args.date}.pdf`);
+          await fs.mkdir(path.dirname(pdfPath), { recursive: true });
+          const { path: generatedPath } = await exportSummariesToPdf(
+            prisma,
+            args.date,
+            args.projectId,
+            pdfPath,
+          );
+          return {
+            success: true,
+            message: "Daily scrum PDF generated",
+            location: generatedPath,
+          };
+        }
 
-      if (args.target === "SLACK") {
-        const { payload } = await exportSummariesToSlackPayload(
-          ctx.prisma,
-          args.date,
-          args.projectId,
-        );
-        const filePath = path.join(
-          process.cwd(),
-          "exports",
-          `daily-scrum-${args.date}-slack.json`,
-        );
-        await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.writeFile(filePath, JSON.stringify(payload, null, 2), "utf-8");
-        return {
-          success: true,
-          message: "Slack payload generated",
-          location: filePath,
-        };
-      }
+        if (args.target === "SLACK") {
+          const { payload } = await exportSummariesToSlackPayload(
+            prisma,
+            args.date,
+            args.projectId,
+          );
+          const filePath = path.join(
+            process.cwd(),
+            "exports",
+            `daily-scrum-${args.date}-slack.json`,
+          );
+          await fs.mkdir(path.dirname(filePath), { recursive: true });
+          await fs.writeFile(filePath, JSON.stringify(payload, null, 2), "utf-8");
+          return {
+            success: true,
+            message: "Slack payload generated",
+            location: filePath,
+          };
+        }
 
-      throw new GraphQLError("Unsupported export target", {
-        extensions: { code: "BAD_USER_INPUT" },
+        throw new GraphQLError("Unsupported export target", {
+          extensions: { code: "BAD_USER_INPUT" },
+        });
       });
     },
   },
   JiraProject: {
     site: (parent: any, _args: unknown, ctx: RequestContext) => {
       if (parent.site) return parent.site;
-      return ctx.prisma.jiraProject.findUnique({ where: { id: parent.id } }).site();
+      return runAsTenant(ctx, (prisma) =>
+        prisma.jiraProject.findUnique({ where: { id: parent.id } }).site(),
+      );
     },
     trackedUsers: (parent: any, _args: unknown, ctx: RequestContext) => {
       if (parent.trackedUsers) return parent.trackedUsers;
-      return ctx.prisma.projectTrackedUser.findMany({
-        where: { projectId: parent.id },
-        orderBy: { displayName: "asc" },
-      });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.projectTrackedUser.findMany({
+          where: { projectId: parent.id },
+          orderBy: { displayName: "asc" },
+        }),
+      );
     },
     syncJob: (parent: any, _args: unknown, ctx: RequestContext) => {
       if (parent.syncJob) return parent.syncJob;
-      return ctx.prisma.syncJob.findUnique({ where: { projectId: parent.id } });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.syncJob.findUnique({ where: { projectId: parent.id } }),
+      );
     },
     syncStates: (parent: any, _args: unknown, ctx: RequestContext) => {
       if (parent.syncStates) return parent.syncStates;
-      return ctx.prisma.syncState.findMany({
-        where: { projectId: parent.id },
-        orderBy: { entity: "asc" },
-      });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.syncState.findMany({
+          where: { projectId: parent.id },
+          orderBy: { entity: "asc" },
+        }),
+      );
     },
   },
   Comment: {
     author: (parent: any, _args: unknown, ctx: RequestContext) => {
       if (parent.author) return parent.author;
-      return ctx.prisma.comment.findUnique({ where: { id: parent.id } }).author();
+      return runAsTenant(ctx, (prisma) =>
+        prisma.comment.findUnique({ where: { id: parent.id } }).author(),
+      );
     },
     issue: (parent: any, _args: unknown, ctx: RequestContext) => {
       if (parent.issue) return parent.issue;
-      return ctx.prisma.comment.findUnique({ where: { id: parent.id } }).issue();
+      return runAsTenant(ctx, (prisma) =>
+        prisma.comment.findUnique({ where: { id: parent.id } }).issue(),
+      );
     },
   },
   Worklog: {
     author: (parent: any, _args: unknown, ctx: RequestContext) => {
       if (parent.author) return parent.author;
-      return ctx.prisma.worklog.findUnique({ where: { id: parent.id } }).author();
+      return runAsTenant(ctx, (prisma) =>
+        prisma.worklog.findUnique({ where: { id: parent.id } }).author(),
+      );
     },
   },
   DailySummary: {
@@ -862,39 +956,51 @@ export const resolvers = {
       if (!accountId || !parent.projectId) {
         return null;
       }
-      return ctx.prisma.projectTrackedUser.findFirst({
-        where: { projectId: parent.projectId, jiraAccountId: accountId },
-      });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.projectTrackedUser.findFirst({
+          where: { projectId: parent.projectId, jiraAccountId: accountId },
+        }),
+      );
     },
     jiraAccountId: (parent: any) => parent.primaryAccountId ?? parent.jiraAccountId ?? parent.jiraAccountIds?.[0] ?? null,
     project: (parent: any, _args: unknown, ctx: RequestContext) => {
       if (parent.project) return parent.project;
-      return ctx.prisma.jiraProject.findUnique({ where: { id: parent.projectId } });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.jiraProject.findUnique({ where: { id: parent.projectId } }),
+      );
     },
   },
   Issue: {
     assignee: (parent: any, _args: unknown, ctx: RequestContext) => {
       if (parent.assignee) return parent.assignee;
       if (!parent.assigneeId) return null;
-      return ctx.prisma.jiraUser.findUnique({ where: { id: parent.assigneeId } });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.jiraUser.findUnique({ where: { id: parent.assigneeId } }),
+      );
     },
     project: (parent: any, _args: unknown, ctx: RequestContext) => {
       if (parent.project) return parent.project;
-      return ctx.prisma.issue.findUnique({ where: { id: parent.id } }).project();
+      return runAsTenant(ctx, (prisma) =>
+        prisma.issue.findUnique({ where: { id: parent.id } }).project(),
+      );
     },
     comments: (parent: any, _args: unknown, ctx: RequestContext) => {
       if (parent.comments) return parent.comments;
-      return ctx.prisma.comment.findMany({
-        where: { issueId: parent.id },
-        orderBy: { jiraCreatedAt: "asc" },
-      });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.comment.findMany({
+          where: { issueId: parent.id },
+          orderBy: { jiraCreatedAt: "asc" },
+        }),
+      );
     },
     worklogs: (parent: any, _args: unknown, ctx: RequestContext) => {
       if (parent.worklogs) return parent.worklogs;
-      return ctx.prisma.worklog.findMany({
-        where: { issueId: parent.id },
-        orderBy: { jiraStartedAt: "asc" },
-      });
+      return runAsTenant(ctx, (prisma) =>
+        prisma.worklog.findMany({
+          where: { issueId: parent.id },
+          orderBy: { jiraStartedAt: "asc" },
+        }),
+      );
     },
   },
 };

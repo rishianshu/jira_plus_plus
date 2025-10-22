@@ -7,7 +7,7 @@ import type {
   ProjectTrackedUser,
   Role,
   Worklog,
-} from "@prisma/client";
+} from "@platform/cdm";
 
 export class PerformanceReviewError extends Error {
   statusCode: number;
@@ -437,15 +437,14 @@ async function loadContext(
         author: { select: { accountId: true, displayName: true } },
       },
     }),
-    prisma.performanceReviewNote.findUnique({
+    prisma.performanceReviewNote.findFirst({
       where: {
-        projectId_trackedUserId_managerId_startDate_endDate: {
-          projectId: filters.projectId,
-          trackedUserId: filters.trackedUserId,
-          managerId: manager.id,
-          startDate: range.startDate,
-          endDate: range.endDate,
-        },
+        tenantId: trackedUser.tenantId,
+        projectId: filters.projectId,
+        trackedUserId: filters.trackedUserId,
+        managerId: manager.id,
+        startDate: range.startDate,
+        endDate: range.endDate,
       },
     }),
   ]);
@@ -724,7 +723,8 @@ export async function savePerformanceNote(
 
   const record = await prisma.performanceReviewNote.upsert({
     where: {
-      projectId_trackedUserId_managerId_startDate_endDate: {
+      tenantId_projectId_trackedUserId_managerId_startDate_endDate: {
+        tenantId: trackedUser.tenantId,
         projectId: filters.projectId,
         trackedUserId: filters.trackedUserId,
         managerId: manager.id,
@@ -736,6 +736,7 @@ export async function savePerformanceNote(
       markdown: filters.markdown,
     },
     create: {
+      tenantId: trackedUser.tenantId,
       projectId: filters.projectId,
       trackedUserId: trackedUser.id,
       managerId: manager.id,

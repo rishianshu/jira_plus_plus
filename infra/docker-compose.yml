@@ -6,7 +6,9 @@ services:
     container_name: jira_postgres
     restart: unless-stopped
     env_file:
-      - .env
+      - ../.env
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -21,7 +23,7 @@ services:
       dockerfile: Dockerfile.api
     container_name: jira_api
     env_file:
-      - .env
+      - ../.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -40,7 +42,7 @@ services:
       dockerfile: Dockerfile.worker
     container_name: jira_worker
     env_file:
-      - .env
+      - ../.env
     depends_on:
       api:
         condition: service_healthy
@@ -59,7 +61,7 @@ services:
       dockerfile: Dockerfile.web
     container_name: jira_web
     env_file:
-      - .env
+      - ../.env
     depends_on:
       api:
         condition: service_healthy
@@ -83,7 +85,7 @@ services:
       - POSTGRES_HOST=postgres
       - POSTGRES_PWD=${POSTGRES_PASSWORD}
     env_file:
-      - .env
+      - ../.env
     ports:
       - "7233:7233"
     healthcheck:
@@ -125,9 +127,11 @@ services:
       - traefik_letsencrypt:/letsencrypt
       - ./traefik/traefik.yml:/etc/traefik/dynamic.yml:ro
     env_file:
-      - .env
+      - ../.env
     restart: unless-stopped
 
 volumes:
   postgres_data:
+    name: jira_plus_plus_postgres_data
   traefik_letsencrypt:
+    name: jira_plus_plus_traefik_letsencrypt
