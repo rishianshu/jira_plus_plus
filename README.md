@@ -4,13 +4,14 @@ Bootstrapped development workspace for the Jira++ platform described in `specs/`
 
 ## Requirements
 - Node.js 20+
-- pnpm 8+
+- pnpm 10+
 - Docker (for Postgres)
 - Temporal server 1.20+ (e.g. [temporalite](https://github.com/temporalio/temporalite) for local dev)
 
 ## Project Structure
 - `apps/api` – Apollo GraphQL server (Node.js + Prisma)
-- `apps/web` – React 18 dashboard powered by Vite, React Router, Tailwind, and shadcn-style UI helpers
+- `apps/jira-plus-plus` – React 18 dashboard powered by Vite, React Router, Tailwind, and shadcn-style UI helpers
+- `packages/*` – Placeholder shared packages for future platform libraries
 - `specs/` – Product and feature specifications
 - `docker-compose.yml` – Local Postgres service
 
@@ -23,7 +24,7 @@ Bootstrapped development workspace for the Jira++ platform described in `specs/`
    ```bash
    cp .env.example .env
    cp apps/api/.env.example apps/api/.env
-   cp apps/web/.env.example apps/web/.env
+   cp apps/jira-plus-plus/.env.example apps/jira-plus-plus/.env
    ```
 3. **Start Postgres**
    ```bash
@@ -60,6 +61,15 @@ Bootstrapped development workspace for the Jira++ platform described in `specs/`
 - **Formatting** – `pnpm format`
 - **Testing** – `pnpm test`
 - **Full verification** – `pnpm verify`
+
+### Monorepo Commands
+
+```bash
+pnpm install
+pnpm dev
+pnpm build
+pnpm start
+```
 
 ## Next Steps
 - Flesh out GraphQL schema & resolvers per feature specs.
