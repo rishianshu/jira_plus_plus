@@ -1,0 +1,13 @@
+{
+  "name": "@platform/tools",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": "./index.js",
+  "scripts": {
+    "build": "echo 'noop'",
+    "dev": "echo 'noop'",
+    "lint": "echo 'noop'",
+    "test": "echo 'noop'"
+  }
+}
